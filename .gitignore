@@ -1,0 +1,29 @@
+# --- Python (backend) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# --- Node / Next.js (frontend) ---
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Claude Code (personal/local config; settings.json itself stays tracked) ---
+.claude/settings.local.json
+
+# --- Env / secrets (anywhere in the tree; keep .env.example templates) ---
+**/.env
+**/.env.*
+!**/.env.example

@@ -1,0 +1,130 @@
+/* Small World OS design tokens — colors, typography, spacing, effects.
+   Source: claude.ai/design "Small World OS" design system project. */
+
+:root {
+  /* --- neutrals / ink --- */
+  --ink: #1b2330;
+  --text-body: #4a525e;
+  --text-muted: #6b7480;
+  --text-faint: #9aa2ae;
+  --text-ghost: #b3b9c2;
+  --text-ghost-2: #c2c8d0;
+
+  /* --- surfaces --- */
+  --canvas: #eceef2;
+  --surface: #ffffff;
+  --surface-sunken: #f6f7f9;
+  --bezel: #0c0e13;
+
+  /* --- hairlines / borders --- */
+  --border: #eceef2;
+  --border-strong: #e7eaef;
+  --border-faint: #f1f3f6;
+  --border-divider: #dfe3ea;
+
+  /* --- accent (periwinkle-indigo), OKLCH --- */
+  --accent: oklch(0.58 0.14 256);
+  --accent-ink: oklch(0.5 0.14 256);
+  --accent-hover: oklch(0.46 0.16 256);
+  --accent-link: oklch(0.55 0.15 256);
+  --accent-tint: oklch(0.96 0.028 256);
+  --accent-tint-2: oklch(0.965 0.028 256);
+  --accent-panel: oklch(0.975 0.02 256);
+  --accent-panel-2: oklch(0.97 0.024 256);
+  --accent-tint-border: oklch(0.9 0.05 256);
+  --accent-wash-row: oklch(0.985 0.014 256);
+
+  /* --- category accent --- */
+  --cat-dot: var(--accent);
+  --cat-dot-ink: var(--accent-ink);
+
+  /* --- semantic (tags / statuses) --- */
+  --good-bg: oklch(0.95 0.05 150);
+  --good-ink: oklch(0.42 0.1 150);
+  --warn-bg: oklch(0.96 0.06 75);
+  --warn-ink: oklch(0.45 0.11 60);
+  --plain-bg: #f1f3f6;
+  --plain-ink: #737b87;
+  --priority-high: oklch(0.6 0.17 25);
+  --priority-low: oklch(0.7 0.13 75);
+  --blocked: oklch(0.6 0.17 25);
+
+  /* --- window traffic lights --- */
+  --tl-red: #ff5f57;
+  --tl-amber: #febc2e;
+  --tl-green: #28c840;
+
+  /* --- typography --- */
+  --font: var(--font-hanken), "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-semibold: 600;
+  --w-bold: 700;
+  --w-black: 800;
+
+  --t-hero: 62px;
+  --tr-hero: -0.04em;
+  --t-display: 46px;
+  --tr-display: -0.03em;
+  --t-title: 30px;
+  --tr-title: -0.02em;
+  --t-h2: 26px;
+  --tr-h2: -0.02em;
+  --t-name-lg: 21px;
+  --tr-name-lg: -0.02em;
+  --t-h3: 20px;
+  --tr-h3: -0.01em;
+  --t-lead: 16px;
+  --tr-lead: 0;
+  --t-item: 16px;
+  --tr-item: -0.01em;
+  --t-body: 15px;
+  --tr-body: 0;
+  --t-meta: 13px;
+  --tr-meta: 0;
+  --t-small: 12.5px;
+  --tr-small: 0;
+  --t-label: 11px;
+  --tr-label: 0.1em;
+
+  --lh-tight: 1;
+  --lh-snug: 1.35;
+  --lh-body: 1.6;
+
+  /* --- spacing --- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-13: 52px;
+  --gutter-screen: 24px;
+  --gutter-page: 40px;
+  --row-gap: 8px;
+
+  /* --- effects: radii --- */
+  --r-pill: 999px;
+  --r-chip: 6px;
+  --r-sm: 10px;
+  --r-md: 12px;
+  --r-lg: 14px;
+  --r-xl: 16px;
+  --r-2xl: 20px;
+  --r-avatar: 13px;
+  --r-window: 18px;
+  --r-window-inner: 10px;
+  --r-phone: 46px;
+  --r-phone-inner: 36px;
+
+  /* --- effects: shadows / focus / motion --- */
+  --shadow-phone: 0 40px 80px -30px rgba(20, 28, 44, 0.45);
+  --shadow-window: 0 50px 90px -35px rgba(20, 28, 44, 0.5);
+  --ring-accent: 2px solid var(--accent);
+  --ring-ink: 2px solid var(--ink);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+}

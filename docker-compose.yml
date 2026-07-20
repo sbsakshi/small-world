@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smallworld
+      POSTGRES_PASSWORD: smallworld
+      POSTGRES_DB: smallworld
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smallworld"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://smallworld:smallworld@postgres:5432/smallworld
+      PROCRASTINATE_DATABASE_URL: postgresql://smallworld:smallworld@postgres:5432/smallworld
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    # One-time setup on a fresh DB: docker compose exec backend python -m procrastinate --app=app.jobs.procrastinate_app.app schema --apply
+    command: python -m procrastinate --app=app.jobs.procrastinate_app.app worker
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+psycopg://smallworld:smallworld@postgres:5432/smallworld
+      PROCRASTINATE_DATABASE_URL: postgresql://smallworld:smallworld@postgres:5432/smallworld
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

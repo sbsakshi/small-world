@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(powershell -Command \"Start-Process 'C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe'\")",
+      "Bash(docker info *)",
+      "Bash(break)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(docker system *)",
+      "Bash(tasklist //FI \"IMAGENAME eq Docker Desktop.exe\")",
+      "Bash(tasklist //FI \"IMAGENAME eq com.docker.backend.exe\")",
+      "Bash(taskkill //F //IM \"Docker Desktop.exe\")",
+      "Bash(taskkill //F //IM \"com.docker.backend.exe\")",
+      "Bash(taskkill //F //IM \"com.docker.build.exe\")",
+      "Bash(taskkill //F //IM \"vpnkit.exe\")",
+      "Bash(start \"\" \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "PowerShell(docker info --format '{{.ServerVersion}}')",
+      "Bash(powershell -Command \"Test-NetConnection -ComputerName localhost -Port 5432\")",
+      "PowerShell(Get-Process | Where-Object { $_.ProcessName -match 'docker|com.docker|vpnkit|wsl' } | Select-Object ProcessName, Id, CPU, WorkingSet)",
+      "PowerShell(Stop-Process -Id 17104 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command psql -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command postgres -ErrorAction SilentlyContinue)",
+      "PowerShell(wsl --shutdown)",
+      "PowerShell(Stop-Process -Name \"Docker Desktop\" -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Name \"com.docker.backend\" -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Start-Process \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "Bash(rm -f cookies.txt)",
+      "Bash(curl -s -i -c cookies.txt -X POST http://localhost:8000/auth/login -H \"Content-Type: application/json\" -d '{\"login_identifier\":\"testfounder\",\"password\":\"testpass123\"}')",
+      "Bash(curl -s -i -b cookies.txt http://localhost:8000/auth/me)",
+      "Bash(curl -s -i -b cookies.txt -c cookies.txt -X POST http://localhost:8000/auth/logout)",
+      "Bash(curl -s -i -X POST http://localhost:8000/auth/login -H \"Content-Type: application/json\" -d '{\"login_identifier\":\"testfounder\",\"password\":\"wrongpass\"}')",
+      "WebFetch(domain:claude.ai)"
+    ]
+  }
+}

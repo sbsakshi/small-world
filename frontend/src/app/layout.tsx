@@ -1,5 +1,6 @@
 import { Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
+import { Toaster } from "@/components/shadcn/sonner";
 
 const hankenGrotesk = Hanken_Grotesk({
   subsets: ["latin"],
@@ -14,7 +15,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={hankenGrotesk.variable}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <Toaster />
+      </body>
     </html>
   );
 }

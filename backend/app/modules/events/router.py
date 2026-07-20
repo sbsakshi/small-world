@@ -115,6 +115,8 @@ def complete_event(
         volunteers_service.mark_events_done(db, honored_ids)
         for volunteer_id in honored_ids:
             job_tasks.schedule_score_recalc(volunteer_id)
+    job_tasks.schedule_autopsy_prompt(event.id)
+    job_tasks.schedule_autopsy_reminder(event.id)
     return event
 
 

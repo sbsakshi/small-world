@@ -12,7 +12,7 @@ from app.modules.events import models as events_models  # noqa: F401
 from app.modules.contacts import models as contacts_models  # noqa: F401
 from app.modules.volunteers import models as volunteers_models  # noqa: F401
 from app.modules.notifications import models as notifications_models  # noqa: F401
-from app.modules.reports import models as reports_models  # noqa: F401
+from app.modules.knowledge import models as knowledge_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

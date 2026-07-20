@@ -135,16 +135,15 @@ def test_city_lead_cannot_create_venue_outside_own_city(db, client, city, founde
 
 def test_decisions_role_gating(client, event_lead, city):
     _login(client, "lead-router")
-    res = client.post("/decisions", json={"city_id": city.id, "text": "Buy easels?"})
-    assert res.status_code == 200
-    decision_id = res.json()["id"]
-
-    # event_lead may raise but not decide
-    res = client.post(f"/decisions/{decision_id}/decide")
+    # Write access to decisions is city_lead + founder only — event_lead is refused outright.
+    res = client.post(
+        "/decisions",
+        json={"title": "Buy easels?", "body": "Cost review", "city_id": city.id, "decided_at": "2026-07-20"},
+    )
     assert res.status_code == 403
 
 
-def test_event_report_requires_completed_event(client, founder, event_lead, city, db):
+def test_autopsy_requires_completed_event(client, founder, event_lead, city, db):
     venue = create_venue(db, _as_user(founder, StaffRole.founder, None), name="V", city_id=city.id, address="A", capacity=5)
     _login(client, "founder-router")
     res = client.post(
@@ -162,5 +161,8 @@ def test_event_report_requires_completed_event(client, founder, event_lead, city
     assert res.status_code == 200
     event_id = res.json()["id"]
 
-    res = client.post(f"/events/{event_id}/report", json={"note": "too early"})
+    res = client.post(
+        f"/events/{event_id}/autopsy",
+        json={"attendance_actual": 10, "venue_rating": 4, "what_worked": "Good", "what_didnt": "Bad"},
+    )
     assert res.status_code == 409

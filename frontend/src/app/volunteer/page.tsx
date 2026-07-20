@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
+import { NotificationsBell } from "@/components/NotificationsBell";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -92,21 +93,22 @@ export default function VolunteerPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 13, height: 13, borderRadius: "50%", background: "var(--accent)" }} />
             <span style={{ font: "var(--w-black) 13px/1 var(--font)" }}>Small World</span>
-            <button
-              onClick={onSignOut}
-              style={{
-                marginLeft: "auto",
-                font: "var(--w-semibold) 11px/1 var(--font)",
-                color: "var(--text-faint)",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                marginRight: 10,
-              }}
-            >
-              Sign out
-            </button>
-            <Avatar initials={initials} size={30} />
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+              <NotificationsBell />
+              <button
+                onClick={onSignOut}
+                style={{
+                  font: "var(--w-semibold) 11px/1 var(--font)",
+                  color: "var(--text-faint)",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                Sign out
+              </button>
+              <Avatar initials={initials} size={30} />
+            </div>
           </div>
           <div style={{ font: "var(--w-medium) 15px/1 var(--font)", color: "var(--text-muted)", marginTop: 20 }}>
             Hi {firstName} —

@@ -225,6 +225,7 @@ export interface Assignment {
   assigned_by: number;
   responded_at: string | null;
   coordinator_note: string | null;
+  rating: number | null;
 }
 
 export const listVolunteers = (cityId?: number) =>
@@ -278,79 +279,122 @@ export const listNotifications = (unreadOnly = false) =>
 export const markNotificationRead = (id: number) =>
   request<Notification>(`/notifications/${id}/read`, { method: "POST" });
 
-// --- Decisions / issues / event reports ---
+// --- Knowledge system: event autopsies / decisions / issues ---
 
-export type DecisionStatus = "open" | "decided";
-export type IssuePriority = "high" | "low";
-export type IssueStatus = "open" | "resolved";
+export interface EventAutopsy {
+  id: number;
+  event_id: number;
+  submitted_by: number;
+  attendance_actual: number;
+  venue_rating: number;
+  what_worked: string;
+  what_didnt: string;
+  submitted_at: string;
+}
+
+export interface PendingAutopsyEvent {
+  id: number;
+  title: string;
+  city_id: number;
+  venue_id: number;
+  starts_at: string;
+}
 
 export interface Decision {
   id: number;
-  city_id: number;
+  title: string;
+  body: string;
+  author_id: number;
+  city_id: number | null;
   venue_id: number | null;
-  text: string;
-  status: DecisionStatus;
-  raised_by_id: number;
-  decided_by_id: number | null;
-  note: string | null;
-  staff_only: boolean;
+  category: EventCategory | null;
+  decided_at: string;
+  created_at: string;
+  updated_at: string;
 }
+
+export type RaisedByType = "staff" | "volunteer";
+export type IssueStatus = "open" | "resolved";
+export type IssueLevel = "event_lead" | "city_lead" | "founder";
 
 export interface Issue {
   id: number;
-  city_id: number;
-  venue_id: number | null;
-  text: string;
-  priority: IssuePriority;
-  status: IssueStatus;
+  title: string;
+  body: string;
+  raised_by_type: RaisedByType;
   raised_by_id: number;
-  resolved_by_id: number | null;
-  due_date: string | null;
+  event_id: number | null;
+  venue_id: number | null;
+  volunteer_id: number | null;
+  status: IssueStatus;
+  current_level: IssueLevel;
+  resolution_note: string | null;
+  resolved_by: number | null;
+  created_at: string;
+  resolved_at: string | null;
 }
 
-export interface ReportTag {
-  tone: "good" | "warn" | "accent" | "plain";
-  label: string;
-}
+export const getAutopsy = (eventId: number) => request<EventAutopsy>(`/events/${eventId}/autopsy`);
+export const submitAutopsy = (
+  eventId: number,
+  payload: {
+    attendance_actual: number;
+    venue_rating: number;
+    what_worked: string;
+    what_didnt: string;
+    volunteer_ratings?: { assignment_id: number; rating: number; coordinator_note?: string | null }[];
+  }
+) => request<EventAutopsy>(`/events/${eventId}/autopsy`, { method: "POST", body: JSON.stringify(payload) });
+export const listVenueAutopsies = (venueId: number, limit?: number) =>
+  request<EventAutopsy[]>(`/venues/${venueId}/autopsies${limit != null ? `?limit=${limit}` : ""}`);
+export const listPendingAutopsies = (cityId?: number) =>
+  request<PendingAutopsyEvent[]>(`/autopsies/pending${cityId != null ? `?city_id=${cityId}` : ""}`);
 
-export interface EventReport {
-  id: number;
-  event_id: number;
-  note: string;
-  tags: ReportTag[] | null;
-  created_by_id: number;
-}
-
-export const listDecisions = (cityId?: number) =>
-  request<Decision[]>(`/decisions${cityId != null ? `?city_id=${cityId}` : ""}`);
+export const listDecisions = (params?: { cityId?: number; venueId?: number; category?: EventCategory; q?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.cityId != null) qs.set("city_id", String(params.cityId));
+  if (params?.venueId != null) qs.set("venue_id", String(params.venueId));
+  if (params?.category) qs.set("category", params.category);
+  if (params?.q) qs.set("q", params.q);
+  const suffix = qs.toString();
+  return request<Decision[]>(`/decisions${suffix ? `?${suffix}` : ""}`);
+};
 export const getDecision = (id: number) => request<Decision>(`/decisions/${id}`);
 export const createDecision = (payload: {
-  city_id: number;
+  title: string;
+  body: string;
+  city_id?: number | null;
   venue_id?: number | null;
-  text: string;
-  note?: string | null;
-  staff_only?: boolean;
+  category?: EventCategory | null;
+  decided_at: string;
 }) => request<Decision>("/decisions", { method: "POST", body: JSON.stringify(payload) });
-export const updateDecision = (id: number, payload: Partial<Pick<Decision, "text" | "note" | "staff_only">>) =>
-  request<Decision>(`/decisions/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-export const decideDecision = (id: number) => request<Decision>(`/decisions/${id}/decide`, { method: "POST" });
+export const updateDecision = (
+  id: number,
+  payload: Partial<Pick<Decision, "title" | "body" | "city_id" | "venue_id" | "category" | "decided_at">>
+) => request<Decision>(`/decisions/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 
-export const listIssues = (cityId?: number) =>
-  request<Issue[]>(`/issues${cityId != null ? `?city_id=${cityId}` : ""}`);
+export const listIssues = (params?: { cityId?: number; venueId?: number; eventId?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.cityId != null) qs.set("city_id", String(params.cityId));
+  if (params?.venueId != null) qs.set("venue_id", String(params.venueId));
+  if (params?.eventId != null) qs.set("event_id", String(params.eventId));
+  const suffix = qs.toString();
+  return request<Issue[]>(`/issues${suffix ? `?${suffix}` : ""}`);
+};
 export const getIssue = (id: number) => request<Issue>(`/issues/${id}`);
 export const createIssue = (payload: {
-  city_id: number;
+  title: string;
+  body: string;
+  event_id?: number | null;
   venue_id?: number | null;
-  text: string;
-  priority: IssuePriority;
-  due_date?: string | null;
+  volunteer_id?: number | null;
 }) => request<Issue>("/issues", { method: "POST", body: JSON.stringify(payload) });
-export const updateIssue = (id: number, payload: Partial<Pick<Issue, "text" | "priority" | "due_date">>) =>
-  request<Issue>(`/issues/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-export const resolveIssue = (id: number) => request<Issue>(`/issues/${id}/resolve`, { method: "POST" });
-
-export const getEventReport = (eventId: number) => request<EventReport>(`/events/${eventId}/report`);
-export const createEventReport = (eventId: number, payload: { note: string; tags?: ReportTag[] | null }) =>
-  request<EventReport>(`/events/${eventId}/report`, { method: "POST", body: JSON.stringify(payload) });
-export const updateEventReport = (eventId: number, payload: { note?: string; tags?: ReportTag[] | null }) =>
-  request<EventReport>(`/events/${eventId}/report`, { method: "PATCH", body: JSON.stringify(payload) });
+export const escalateIssue = (id: number) => request<Issue>(`/issues/${id}/escalate`, { method: "POST" });
+export const resolveIssue = (id: number, resolutionNote: string) =>
+  request<Issue>(`/issues/${id}/resolve`, { method: "POST", body: JSON.stringify({ resolution_note: resolutionNote }) });
+export const issuePatternCount = (params: { venueId?: number; volunteerId?: number }) => {
+  const qs = new URLSearchParams();
+  if (params.venueId != null) qs.set("venue_id", String(params.venueId));
+  if (params.volunteerId != null) qs.set("volunteer_id", String(params.volunteerId));
+  return request<{ count: number }>(`/issues/pattern-count?${qs.toString()}`);
+};

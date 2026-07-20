@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { useParams, notFound } from "next/navigation";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/useRequireAuth";
@@ -11,10 +11,15 @@ import {
   listDecisions,
   listIssues,
   listVolunteers,
+  listStaff,
   createDecision,
   createIssue,
-  decideDecision,
+  escalateIssue,
   resolveIssue,
+  createVenue,
+  createEvent,
+  createStaff,
+  createVolunteer,
   ApiError,
   type City,
   type Venue,
@@ -22,12 +27,17 @@ import {
   type Decision,
   type Issue,
   type Volunteer,
+  type Staff,
+  type EventCategory,
+  type StaffRole,
 } from "@/lib/api";
 import { StaffHeader } from "@/components/StaffHeader";
 import { NavItem } from "@/components/ui/NavItem";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
+import { toastSuccess, toastError } from "@/lib/toast";
 
 type Tab = "Overview" | "Events" | "Decisions" | "Issues" | "People";
 
@@ -63,6 +73,7 @@ export default function CityOverviewPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [roster, setRoster] = useState<Volunteer[]>([]);
+  const [staff, setStaff] = useState<Staff[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -72,8 +83,8 @@ export default function CityOverviewPage() {
       listCities(),
       listVenues(),
       listEvents({ city_id: cityId }),
-      listDecisions(cityId),
-      listIssues(cityId),
+      listDecisions({ cityId }),
+      listIssues({ cityId }),
       listVolunteers(cityId),
     ])
       .then(([cities, v, e, d, i, r]) => {
@@ -85,6 +96,11 @@ export default function CityOverviewPage() {
         setRoster(r);
       })
       .catch(() => setError("Couldn't load this city. Try refreshing."));
+    // Staff listing is founder/city_lead only — fetched separately so an event_lead's
+    // 403 here doesn't take down the rest of the page (they can't see this data anyway).
+    listStaff()
+      .then((s) => setStaff(s.filter((x) => x.city_id === cityId)))
+      .catch(() => setStaff([]));
   }, [ready, cityId, refreshKey]);
 
   if (ready && city === null) notFound();
@@ -104,17 +120,18 @@ export default function CityOverviewPage() {
   }
 
   const refresh = () => setRefreshKey((k) => k + 1);
-  const openDecisions = decisions.filter((d) => d.status === "open");
   const openIssues = issues.filter((i) => i.status === "open");
   const upcomingEvents = events.filter((e) => e.status === "published");
   const completedEvents = events.filter((e) => e.status === "completed");
   const roleLabel = user.role === "founder" ? "full access" : user.role === "city_lead" ? "city lead" : "event lead";
 
-  const highIssue = openIssues.find((i) => i.priority === "high");
-  const needsYou = openDecisions[0]
-    ? { title: openDecisions[0].text, sub: openDecisions[0].note ?? "open decision" }
-    : highIssue
-      ? { title: highIssue.text, sub: "high priority · open" }
+  const oldestOpenIssue = openIssues
+    .slice()
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0];
+  const needsYou = oldestOpenIssue
+    ? { title: oldestOpenIssue.title, sub: `open ${issueAgeDays(oldestOpenIssue.created_at)} days` }
+    : decisions[0]
+      ? { title: decisions[0].title, sub: decisions[0].body }
       : null;
 
   return (
@@ -160,7 +177,7 @@ export default function CityOverviewPage() {
               n.key === "Events"
                 ? String(events.length)
                 : n.key === "Decisions"
-                  ? String(openDecisions.length)
+                  ? String(decisions.length)
                   : n.key === "Issues"
                     ? String(openIssues.length)
                     : n.key === "People"
@@ -227,13 +244,39 @@ export default function CityOverviewPage() {
           )}
 
           <div style={{ padding: "30px 40px 40px" }}>
-            {tab === "Overview" && <OverviewTab events={events} cityId={cityId} roster={roster} />}
-            {tab === "Events" && <EventsTab events={events} venues={venues} cityId={cityId} />}
+            {tab === "Overview" && (
+              <OverviewTab
+                events={events}
+                cityId={cityId}
+                roster={roster}
+                venues={venues}
+                canManageOrg={user.role === "founder" || user.role === "city_lead"}
+                onChanged={refresh}
+              />
+            )}
+            {tab === "Events" && (
+              <EventsTab
+                events={events}
+                venues={venues}
+                cityId={cityId}
+                staff={staff}
+                canCreate={user.role === "founder" || user.role === "city_lead"}
+                onChanged={refresh}
+              />
+            )}
             {tab === "Decisions" && (
               <DecisionsTab decisions={decisions} venues={venues} cityId={cityId} onChanged={refresh} />
             )}
             {tab === "Issues" && <IssuesTab issues={issues} venues={venues} cityId={cityId} onChanged={refresh} />}
-            {tab === "People" && <PeopleTab people={roster} cityId={cityId} />}
+            {tab === "People" && (
+              <PeopleTab
+                people={roster}
+                staff={staff}
+                cityId={cityId}
+                userRole={user.role}
+                onChanged={refresh}
+              />
+            )}
           </div>
         </div>
 
@@ -285,14 +328,12 @@ export default function CityOverviewPage() {
               decisions.slice(0, 5).map((d) => (
                 <div key={d.id} style={{ padding: "13px 0", borderBottom: "1px solid var(--border-faint)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                    <Badge tone={d.status === "decided" ? "decided" : "open"}>{d.status}</Badge>
+                    <span style={{ font: "var(--w-semibold) 12px/1 var(--font)", color: "var(--text-faint)" }}>{d.decided_at}</span>
                   </div>
-                  <div style={{ font: "var(--w-semibold) 14.5px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.text}</div>
-                  {d.note ? (
-                    <div style={{ font: "var(--w-medium) 12.5px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 3 }}>
-                      {d.note}
-                    </div>
-                  ) : null}
+                  <div style={{ font: "var(--w-semibold) 14.5px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.title}</div>
+                  <div style={{ font: "var(--w-medium) 12.5px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 3 }}>
+                    {d.body}
+                  </div>
                 </div>
               ))
             )}
@@ -310,13 +351,13 @@ export default function CityOverviewPage() {
                       width: 9,
                       height: 9,
                       borderRadius: "50%",
-                      background: i.priority === "high" ? "var(--priority-high)" : "var(--priority-low)",
+                      background: issueAgeDays(i.created_at) > 7 ? "var(--priority-high)" : "var(--priority-low)",
                       marginTop: 6,
                       flexShrink: 0,
                     }}
                   />
                   <div style={{ flex: 1 }}>
-                    <div style={{ font: "var(--w-semibold) 14.5px/1.4 var(--font)" }}>{i.text}</div>
+                    <div style={{ font: "var(--w-semibold) 14.5px/1.4 var(--font)" }}>{i.title}</div>
                   </div>
                 </div>
               ))
@@ -330,6 +371,36 @@ export default function CityOverviewPage() {
 
 function EmptyNote({ children }: { children: React.ReactNode }) {
   return <div style={{ font: "var(--w-medium) 13px/1.5 var(--font)", color: "var(--text-faint)" }}>{children}</div>;
+}
+
+function CredentialRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "10px 14px",
+        borderRadius: "var(--r-md)",
+        background: "var(--surface-sunken)",
+        border: "1px solid var(--border-strong)",
+      }}
+    >
+      <span style={{ font: "var(--w-semibold) 12px/1 var(--font)", color: "var(--text-faint)" }}>{label}</span>
+      <span style={{ font: "var(--w-bold) 14px/1 var(--font-mono, var(--font))", letterSpacing: "0.02em" }}>{value}</span>
+    </div>
+  );
+}
+
+function generateLoginCredentials(phone: string): { loginIdentifier: string; password: string } {
+  const digits = phone.replace(/\D/g, "");
+  const loginIdentifier = digits || phone.trim();
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = new Uint32Array(10);
+  if (typeof window !== "undefined" && window.crypto) window.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 4294967296);
+  const password = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+  return { loginIdentifier, password };
 }
 
 function SectionHeader({ title, sub }: { title: string; sub?: string }) {
@@ -350,7 +421,21 @@ function SectionHeader({ title, sub }: { title: string; sub?: string }) {
   );
 }
 
-function OverviewTab({ events, cityId, roster }: { events: Event[]; cityId: number; roster: Volunteer[] }) {
+function OverviewTab({
+  events,
+  cityId,
+  roster,
+  venues,
+  canManageOrg,
+  onChanged,
+}: {
+  events: Event[];
+  cityId: number;
+  roster: Volunteer[];
+  venues: Venue[];
+  canManageOrg: boolean;
+  onChanged: () => void;
+}) {
   const upcoming = events.filter((e) => e.status === "published");
   const latest = events.filter((e) => e.status === "completed")[0];
 
@@ -372,6 +457,13 @@ function OverviewTab({ events, cityId, roster }: { events: Event[]; cityId: numb
         </div>
       ) : null}
 
+      {canManageOrg ? (
+        <div style={{ marginBottom: 28 }}>
+          <SectionHeader title="Venues" sub={`${venues.length} in this city`} />
+          <VenuesPanel venues={venues} cityId={cityId} onChanged={onChanged} />
+        </div>
+      ) : null}
+
       <div>
         <SectionHeader title="Roster" sub={`${roster.length} volunteers`} />
         {roster.length === 0 ? (
@@ -389,13 +481,149 @@ function OverviewTab({ events, cityId, roster }: { events: Event[]; cityId: numb
   );
 }
 
-function EventsTab({ events, venues, cityId }: { events: Event[]; venues: Venue[]; cityId: number }) {
-  const upcoming = events.filter((e) => e.status === "published");
-  const drafts = events.filter((e) => e.status === "draft");
-  const past = events.filter((e) => e.status === "completed" || e.status === "cancelled");
+function VenuesPanel({ venues, cityId, onChanged }: { venues: Venue[]; cityId: number; onChanged: () => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [capacity, setCapacity] = useState("50");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !address.trim()) return;
+    setSubmitting(true);
+    try {
+      await createVenue({ name: name.trim(), city_id: cityId, address: address.trim(), capacity: Number(capacity) || 1 });
+      setName("");
+      setAddress("");
+      setCapacity("50");
+      setShowForm(false);
+      toastSuccess(`Venue "${name.trim()}" added.`);
+      onChanged();
+    } catch (err) {
+      toastError(err instanceof ApiError ? err.message : "Couldn't create this venue.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div>
+      {venues.length === 0 ? <EmptyNote>No venues yet.</EmptyNote> : null}
+      {venues.map((v) => (
+        <div key={v.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border-faint)" }}>
+          <span style={{ font: "var(--w-semibold) 14.5px/1 var(--font)" }}>{v.name}</span>
+          <span style={{ font: "var(--w-medium) 13px/1 var(--font)", color: "var(--text-faint)" }}>
+            {v.address} · capacity {v.capacity}
+          </span>
+        </div>
+      ))}
+      <div style={{ marginTop: 12 }}>
+        <Button size="sm" variant="secondary" onClick={() => setShowForm(true)}>
+          + Add venue
+        </Button>
+      </div>
+      {showForm ? (
+        <Modal title="Add venue" onClose={() => setShowForm(false)} width={420}>
+          <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="Venue name">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Venue name…" autoFocus style={fieldStyle} />
+            </Field>
+            <Field label="Address">
+              <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Address…" style={fieldStyle} />
+            </Field>
+            <Field label="Capacity">
+              <input
+                value={capacity}
+                onChange={(e) => setCapacity(e.target.value)}
+                type="number"
+                min={1}
+                placeholder="Capacity"
+                style={fieldStyle}
+              />
+            </Field>
+            <ModalActions>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={submitting || !name.trim() || !address.trim()}>
+                Add venue
+              </Button>
+            </ModalActions>
+          </form>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+const inputStyle: CSSProperties = {
+  font: "var(--w-medium) 14px/1 var(--font)",
+  padding: "10px 12px",
+  border: "1px solid var(--border-strong)",
+  borderRadius: "var(--r-md)",
+  background: "var(--surface)",
+  color: "var(--ink)",
+};
+
+const fieldStyle: CSSProperties = { ...inputStyle, width: "100%", boxSizing: "border-box" };
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span style={{ font: "var(--w-semibold) 12px/1 var(--font)", color: "var(--text-faint)" }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ModalActions({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>{children}</div>;
+}
+
+function EventsTab({
+  events,
+  venues,
+  cityId,
+  staff,
+  canCreate,
+  onChanged,
+}: {
+  events: Event[];
+  venues: Venue[];
+  cityId: number;
+  staff: Staff[];
+  canCreate: boolean;
+  onChanged: () => void;
+}) {
+  const upcoming = events.filter((e) => e.status === "published");
+  const drafts = events.filter((e) => e.status === "draft");
+  const past = events.filter((e) => e.status === "completed" || e.status === "cancelled");
+  const [showForm, setShowForm] = useState(false);
+
+  return (
+    <div>
+      {canCreate ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+          <Button size="sm" onClick={() => setShowForm(true)}>
+            + Add event
+          </Button>
+        </div>
+      ) : null}
+      {showForm ? (
+        <Modal title="Add event" onClose={() => setShowForm(false)} width={520}>
+          <NewEventForm
+            venues={venues}
+            cityId={cityId}
+            staff={staff}
+            onCreated={() => {
+              onChanged();
+              setShowForm(false);
+            }}
+            onCancel={() => setShowForm(false)}
+          />
+        </Modal>
+      ) : null}
       <div style={{ marginBottom: 28 }}>
         <SectionHeader title="Upcoming" sub={`${upcoming.length} scheduled`} />
         {upcoming.length === 0 ? <EmptyNote>Nothing scheduled yet.</EmptyNote> : upcoming.map((e) => <EventRow key={e.id} event={e} venues={venues} cityId={cityId} />)}
@@ -411,6 +639,129 @@ function EventsTab({ events, venues, cityId }: { events: Event[]; venues: Venue[
         {past.length === 0 ? <EmptyNote>No finished events yet.</EmptyNote> : past.map((e) => <EventRow key={e.id} event={e} venues={venues} cityId={cityId} />)}
       </div>
     </div>
+  );
+}
+
+const CATEGORIES: EventCategory[] = ["art", "social", "wellness", "cooking"];
+
+function NewEventForm({
+  venues,
+  cityId,
+  staff,
+  onCreated,
+  onCancel,
+}: {
+  venues: Venue[];
+  cityId: number;
+  staff: Staff[];
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const leads = staff.filter((s) => s.role === "event_lead" || s.role === "city_lead" || s.role === "founder");
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState<EventCategory>("social");
+  const [venueId, setVenueId] = useState<string>("");
+  const [leadId, setLeadId] = useState<string>("");
+  const [startsAt, setStartsAt] = useState("");
+  const [capacity, setCapacity] = useState("30");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !venueId || !leadId || !startsAt) return;
+    setSubmitting(true);
+    try {
+      await createEvent({
+        title: title.trim(),
+        category,
+        city_id: cityId,
+        venue_id: Number(venueId),
+        starts_at: new Date(startsAt).toISOString(),
+        capacity: Number(capacity) || 1,
+        lead_id: Number(leadId),
+      });
+      const createdTitle = title.trim();
+      setTitle("");
+      setStartsAt("");
+      setCapacity("30");
+      toastSuccess(`"${createdTitle}" created as a draft.`);
+      onCreated();
+    } catch (err) {
+      toastError(err instanceof ApiError ? err.message : "Couldn't create this event.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Field label="Event title">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Event title…" autoFocus style={fieldStyle} />
+      </Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <Field label="Category">
+            <select value={category} onChange={(e) => setCategory(e.target.value as EventCategory)} style={fieldStyle}>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div style={{ flex: 1 }}>
+          <Field label="Venue">
+            <select value={venueId} onChange={(e) => setVenueId(e.target.value)} style={fieldStyle}>
+              <option value="">Venue…</option>
+              {venues.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      </div>
+      <Field label="Lead">
+        <select value={leadId} onChange={(e) => setLeadId(e.target.value)} style={fieldStyle}>
+          <option value="">Lead…</option>
+          {leads.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 2 }}>
+          <Field label="Starts at">
+            <input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} style={fieldStyle} />
+          </Field>
+        </div>
+        <div style={{ flex: 1 }}>
+          <Field label="Capacity">
+            <input
+              type="number"
+              min={1}
+              value={capacity}
+              onChange={(e) => setCapacity(e.target.value)}
+              placeholder="Capacity"
+              style={fieldStyle}
+            />
+          </Field>
+        </div>
+      </div>
+      {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
+      <ModalActions>
+        <Button type="button" size="sm" variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={submitting || !title.trim() || !venueId || !leadId || !startsAt}>
+          Create draft
+        </Button>
+      </ModalActions>
+    </form>
   );
 }
 
@@ -455,18 +806,27 @@ function DecisionsTab({
   cityId: number;
   onChanged: () => void;
 }) {
-  const [text, setText] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!title.trim() || !body.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      await createDecision({ city_id: cityId, text: text.trim() });
-      setText("");
+      await createDecision({
+        city_id: cityId,
+        title: title.trim(),
+        body: body.trim(),
+        decided_at: new Date().toISOString().slice(0, 10),
+      });
+      setTitle("");
+      setBody("");
+      setShowForm(false);
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't raise this decision.");
@@ -475,62 +835,60 @@ function DecisionsTab({
     }
   }
 
-  async function onDecide(id: number) {
-    try {
-      await decideDecision(id);
-      onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't mark this decided.");
-    }
-  }
-
   return (
     <>
-      <SectionHeader title="Decision log" sub="most recent first" />
-      <form onSubmit={onSubmit} style={{ display: "flex", gap: 8, margin: "12px 0 20px" }}>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Raise a decision…"
-          style={{
-            flex: 1,
-            font: "var(--w-medium) 14px/1 var(--font)",
-            padding: "10px 12px",
-            border: "1px solid var(--border-strong)",
-            borderRadius: "var(--r-md)",
-            background: "var(--surface)",
-            color: "var(--ink)",
-          }}
-        />
-        <Button type="submit" size="sm" disabled={submitting || !text.trim()}>
-          Raise
+      <SectionHeader title="Decisions" sub="most recent first" />
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0 20px" }}>
+        <Button size="sm" onClick={() => setShowForm(true)}>
+          + Add decision
         </Button>
-      </form>
-      {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)", marginBottom: 12 }}>{error}</div> : null}
+      </div>
+      {showForm ? (
+        <Modal title="Add decision" onClose={() => setShowForm(false)} width={480}>
+          <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="Title">
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Decision title…" autoFocus style={fieldStyle} />
+            </Field>
+            <Field label="Why? (the reasoning behind it)">
+              <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="What was decided and why…" style={fieldStyle} />
+            </Field>
+            {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
+            <ModalActions>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={submitting || !title.trim() || !body.trim()}>
+                Raise
+              </Button>
+            </ModalActions>
+          </form>
+        </Modal>
+      ) : null}
       {decisions.length === 0 ? (
         <EmptyNote>No decisions logged yet.</EmptyNote>
       ) : (
-        decisions.map((d) => (
-          <div key={d.id} style={{ padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-              <Badge tone={d.status === "decided" ? "decided" : "open"}>{d.status}</Badge>
-              {d.staff_only ? <Badge tone="staff">staff only</Badge> : null}
-              {d.venue_id ? <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === d.venue_id)?.name}</span> : null}
-            </div>
-            <div style={{ font: "var(--w-bold) 17px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.text}</div>
-            {d.note ? <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 4 }}>{d.note}</div> : null}
-            {d.status === "open" ? (
-              <div style={{ marginTop: 10 }}>
-                <Button size="sm" variant="secondary" onClick={() => onDecide(d.id)}>
-                  Mark decided
-                </Button>
+        decisions.map((d) => {
+          const edited = new Date(d.updated_at).getTime() - new Date(d.created_at).getTime() > 60_000;
+          return (
+            <div key={d.id} style={{ padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{d.decided_at}</span>
+                {d.category ? <Badge tone="staff">{d.category}</Badge> : null}
+                {d.venue_id ? <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === d.venue_id)?.name}</span> : null}
+                {edited ? <span style={{ font: "var(--w-medium) 12px/1 var(--font)", color: "var(--text-faint)" }}>edited</span> : null}
               </div>
-            ) : null}
-          </div>
-        ))
+              <div style={{ font: "var(--w-bold) 17px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.title}</div>
+              <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 4 }}>{d.body}</div>
+            </div>
+          );
+        })
       )}
     </>
   );
+}
+
+function issueAgeDays(createdAt: string): number {
+  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000);
 }
 
 function IssuesTab({
@@ -544,19 +902,25 @@ function IssuesTab({
   cityId: number;
   onChanged: () => void;
 }) {
-  const [text, setText] = useState("");
-  const [priority, setPriority] = useState<"high" | "low">("low");
+  const [showForm, setShowForm] = useState(false);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [venueId, setVenueId] = useState<number | "">(venues[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [resolutionNote, setResolutionNote] = useState("");
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!title.trim() || !body.trim() || !venueId) return;
     setSubmitting(true);
     setError(null);
     try {
-      await createIssue({ city_id: cityId, text: text.trim(), priority });
-      setText("");
+      await createIssue({ title: title.trim(), body: body.trim(), venue_id: Number(venueId) });
+      setTitle("");
+      setBody("");
+      setShowForm(false);
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't raise this issue.");
@@ -565,9 +929,21 @@ function IssuesTab({
     }
   }
 
-  async function onResolve(id: number) {
+  async function onEscalate(id: number) {
     try {
-      await resolveIssue(id);
+      await escalateIssue(id);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't escalate this issue.");
+    }
+  }
+
+  async function onResolve(id: number) {
+    if (!resolutionNote.trim()) return;
+    try {
+      await resolveIssue(id, resolutionNote.trim());
+      setResolvingId(null);
+      setResolutionNote("");
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't resolve this issue.");
@@ -576,76 +952,193 @@ function IssuesTab({
 
   return (
     <>
-      <SectionHeader title="Open issues" />
-      <form onSubmit={onSubmit} style={{ display: "flex", gap: 8, margin: "12px 0 20px" }}>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Raise an issue…"
-          style={{
-            flex: 1,
-            font: "var(--w-medium) 14px/1 var(--font)",
-            padding: "10px 12px",
-            border: "1px solid var(--border-strong)",
-            borderRadius: "var(--r-md)",
-            background: "var(--surface)",
-            color: "var(--ink)",
-          }}
-        />
-        <select
-          value={priority}
-          onChange={(e) => setPriority(e.target.value as "high" | "low")}
-          style={{ font: "var(--w-medium) 14px/1 var(--font)", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border-strong)" }}
-        >
-          <option value="low">low</option>
-          <option value="high">high</option>
-        </select>
-        <Button type="submit" size="sm" disabled={submitting || !text.trim()}>
-          Raise
+      <SectionHeader title="Issues" />
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0 20px" }}>
+        <Button size="sm" onClick={() => setShowForm(true)}>
+          + Add issue
         </Button>
-      </form>
-      {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)", marginBottom: 12 }}>{error}</div> : null}
+      </div>
+      {showForm ? (
+        <Modal title="Add issue" onClose={() => setShowForm(false)} width={480}>
+          <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="Title">
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Issue title…" autoFocus style={fieldStyle} />
+            </Field>
+            <Field label="What's going on?">
+              <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="Describe the issue…" style={fieldStyle} />
+            </Field>
+            <Field label="Venue">
+              <select
+                value={venueId}
+                onChange={(e) => setVenueId(e.target.value ? Number(e.target.value) : "")}
+                style={fieldStyle}
+              >
+                {venues.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            </Field>
+            {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
+            <ModalActions>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={submitting || !title.trim() || !body.trim() || !venueId}>
+                Raise
+              </Button>
+            </ModalActions>
+          </form>
+        </Modal>
+      ) : null}
       {issues.length === 0 ? (
-        <EmptyNote>No open issues.</EmptyNote>
+        <EmptyNote>No issues raised.</EmptyNote>
       ) : (
-        issues.map((i) => (
-          <div key={i.id} style={{ display: "flex", gap: 14, padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
-            <span
-              style={{
-                width: 11,
-                height: 11,
-                borderRadius: "50%",
-                background: i.priority === "high" ? "var(--priority-high)" : "var(--priority-low)",
-                marginTop: 6,
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ font: "var(--w-semibold) 16px/1.4 var(--font)" }}>{i.text}</span>
-                {i.venue_id ? <span style={{ font: "var(--w-medium) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === i.venue_id)?.name}</span> : null}
-              </div>
-              <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)" }}>
-                {i.priority} priority{i.due_date ? ` · due ${i.due_date}` : ""} · {i.status}
-              </div>
-              {i.status === "open" ? (
-                <div style={{ marginTop: 8 }}>
-                  <Button size="sm" variant="secondary" onClick={() => onResolve(i.id)}>
-                    Resolve
-                  </Button>
+        issues.map((i) => {
+          const age = issueAgeDays(i.created_at);
+          return (
+            <div key={i.id} style={{ display: "flex", gap: 14, padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
+              <span
+                style={{
+                  width: 11,
+                  height: 11,
+                  borderRadius: "50%",
+                  background: i.status === "open" && age > 7 ? "var(--priority-high)" : "var(--priority-low)",
+                  marginTop: 6,
+                  flexShrink: 0,
+                }}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                  <span style={{ font: "var(--w-semibold) 16px/1.4 var(--font)" }}>{i.title}</span>
+                  <Badge tone={i.status === "resolved" ? "decided" : "open"}>{i.status}</Badge>
+                  <Badge tone="staff">{i.current_level.replace("_", " ")}</Badge>
+                  {i.venue_id ? <span style={{ font: "var(--w-medium) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === i.venue_id)?.name}</span> : null}
                 </div>
-              ) : null}
+                <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)" }}>{i.body}</div>
+                <div style={{ font: "var(--w-medium) 12.5px/1.3 var(--font)", color: age > 7 ? "var(--priority-high)" : "var(--text-faint)", marginTop: 4 }}>
+                  open {age} {age === 1 ? "day" : "days"}
+                </div>
+                {i.status === "resolved" && i.resolution_note ? (
+                  <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--good-ink)", marginTop: 4 }}>{i.resolution_note}</div>
+                ) : null}
+                {i.status === "open" ? (
+                  <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {i.current_level !== "founder" ? (
+                      <Button size="sm" variant="secondary" onClick={() => onEscalate(i.id)}>
+                        Escalate
+                      </Button>
+                    ) : null}
+                    {resolvingId === i.id ? (
+                      <>
+                        <input
+                          value={resolutionNote}
+                          onChange={(e) => setResolutionNote(e.target.value)}
+                          placeholder="Resolution note…"
+                          autoFocus
+                          style={{
+                            font: "var(--w-medium) 13px/1 var(--font)",
+                            padding: "8px 10px",
+                            border: "1px solid var(--border-strong)",
+                            borderRadius: "var(--r-md)",
+                            background: "var(--surface)",
+                            color: "var(--ink)",
+                          }}
+                        />
+                        <Button size="sm" disabled={!resolutionNote.trim()} onClick={() => onResolve(i.id)}>
+                          Confirm resolve
+                        </Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="secondary" onClick={() => { setResolvingId(i.id); setResolutionNote(""); }}>
+                        Resolve
+                      </Button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </>
   );
 }
 
-function PeopleTab({ people, cityId }: { people: Volunteer[]; cityId: number }) {
+function PeopleTab({
+  people,
+  staff,
+  cityId,
+  userRole,
+  onChanged,
+}: {
+  people: Volunteer[];
+  staff: Staff[];
+  cityId: number;
+  userRole: StaffRole | null;
+  onChanged: () => void;
+}) {
+  const canManageOrg = userRole === "founder" || userRole === "city_lead";
+  const [showForm, setShowForm] = useState(false);
+  const [credentials, setCredentials] = useState<{ name: string; loginIdentifier: string; password: string } | null>(null);
+
   return (
     <>
+      {canManageOrg ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+          <Button size="sm" onClick={() => setShowForm(true)}>
+            + Add staff
+          </Button>
+        </div>
+      ) : null}
+      {showForm ? (
+        <Modal title="Add staff" onClose={() => setShowForm(false)} width={460}>
+          <AddPersonForm
+            cityId={cityId}
+            userRole={userRole}
+            onCreated={(created) => {
+              onChanged();
+              setShowForm(false);
+              setCredentials(created);
+            }}
+            onCancel={() => setShowForm(false)}
+          />
+        </Modal>
+      ) : null}
+      {credentials ? (
+        <Modal title="Account created" onClose={() => setCredentials(null)} width={420}>
+          <div style={{ font: "var(--w-medium) 14px/1.5 var(--font)", color: "var(--text-muted)", marginBottom: 16 }}>
+            Share these login details with {credentials.name} — this password won&apos;t be shown again.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+            <CredentialRow label="Username" value={credentials.loginIdentifier} />
+            <CredentialRow label="Password" value={credentials.password} />
+          </div>
+          <ModalActions>
+            <Button size="sm" onClick={() => setCredentials(null)}>
+              Done
+            </Button>
+          </ModalActions>
+        </Modal>
+      ) : null}
+
+      {canManageOrg ? (
+        <div style={{ marginBottom: 28 }}>
+          <SectionHeader title="Staff" sub={`${staff.length} in this city`} />
+          {staff.length === 0 ? (
+            <EmptyNote>No staff assigned yet.</EmptyNote>
+          ) : (
+            staff.map((s) => (
+              <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border-faint)" }}>
+                <span style={{ font: "var(--w-semibold) 14.5px/1 var(--font)" }}>{s.name}</span>
+                <span style={{ font: "var(--w-medium) 13px/1 var(--font)", color: "var(--text-faint)" }}>
+                  {s.role.replace("_", " ")}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+
       <SectionHeader title="People" sub={`${people.length} volunteers`} />
       {people.length === 0 ? (
         <EmptyNote>No volunteers in this city yet.</EmptyNote>
@@ -706,5 +1199,146 @@ function PeopleTab({ people, cityId }: { people: Volunteer[]; cityId: number }) 
         })
       )}
     </>
+  );
+}
+
+const SKILLS: EventCategory[] = ["art", "social", "wellness", "cooking"];
+
+type PersonType = "staff" | "volunteer";
+
+function AddPersonForm({
+  cityId,
+  userRole,
+  onCreated,
+  onCancel,
+}: {
+  cityId: number;
+  userRole: StaffRole | null;
+  onCreated: (created: { name: string; loginIdentifier: string; password: string }) => void;
+  onCancel: () => void;
+}) {
+  const [type, setType] = useState<PersonType>("staff");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [role, setRole] = useState<StaffRole>("event_lead");
+  const [skills, setSkills] = useState<EventCategory[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggleSkill(s: EventCategory) {
+    setSkills((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !phone.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    const { loginIdentifier, password } = generateLoginCredentials(phone);
+    try {
+      if (type === "staff") {
+        await createStaff({
+          name: name.trim(),
+          phone: phone.trim(),
+          login_identifier: loginIdentifier,
+          password,
+          role: userRole === "founder" ? role : "event_lead",
+          city_id: cityId,
+        });
+      } else {
+        await createVolunteer({
+          name: name.trim(),
+          phone: phone.trim(),
+          login_identifier: loginIdentifier,
+          password,
+          city_id: cityId,
+          skills,
+        });
+      }
+      onCreated({ name: name.trim(), loginIdentifier, password });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Couldn't create this ${type === "staff" ? "staff member" : "volunteer"}.`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Field label="Type">
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["staff", "volunteer"] as PersonType[]).map((t) => (
+            <button
+              type="button"
+              key={t}
+              onClick={() => setType(t)}
+              style={{
+                flex: 1,
+                font: "var(--w-semibold) 13px/1 var(--font)",
+                padding: "10px 12px",
+                borderRadius: "var(--r-md)",
+                border: `1px solid ${type === t ? "var(--accent)" : "var(--border-strong)"}`,
+                background: type === t ? "var(--accent-tint)" : "var(--surface)",
+                color: type === t ? "var(--accent-ink)" : "var(--text-muted)",
+                cursor: "pointer",
+                textTransform: "capitalize",
+              }}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name…" autoFocus style={fieldStyle} />
+      </Field>
+      <Field label="Phone">
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone…" style={fieldStyle} />
+      </Field>
+      {type === "staff" ? (
+        userRole === "founder" ? (
+          <Field label="Role">
+            <select value={role} onChange={(e) => setRole(e.target.value as StaffRole)} style={fieldStyle}>
+              <option value="event_lead">event lead</option>
+              <option value="city_lead">city lead</option>
+            </select>
+          </Field>
+        ) : (
+          <div style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>Role: event lead</div>
+        )
+      ) : (
+        <Field label="Tags (optional)">
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {SKILLS.map((s) => (
+              <button
+                type="button"
+                key={s}
+                onClick={() => toggleSkill(s)}
+                style={{
+                  font: "var(--w-semibold) 12px/1 var(--font)",
+                  padding: "9px 10px",
+                  borderRadius: "var(--r-md)",
+                  border: `1px solid ${skills.includes(s) ? "var(--accent)" : "var(--border-strong)"}`,
+                  background: skills.includes(s) ? "var(--accent-tint)" : "var(--surface)",
+                  color: skills.includes(s) ? "var(--accent-ink)" : "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+      {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
+      <ModalActions>
+        <Button type="button" size="sm" variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={submitting || !name.trim() || !phone.trim()}>
+          {type === "staff" ? "Add staff" : "Add volunteer"}
+        </Button>
+      </ModalActions>
+    </form>
   );
 }

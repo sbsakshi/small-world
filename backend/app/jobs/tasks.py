@@ -13,10 +13,15 @@ logger = logging.getLogger(__name__)
 
 ASSIGNMENT_RESPONSE_WINDOW_HOURS = 24
 NO_SHOW_SWEEP_DELAY_HOURS = 6
+AUTOPSY_REMINDER_DELAY_HOURS = 48
 
 
 def _assignment_expiry_lock(assignment_id: int) -> str:
     return f"assignment-expiry-{assignment_id}"
+
+
+def _autopsy_reminder_lock(event_id: int) -> str:
+    return f"autopsy_reminder:{event_id}"
 
 
 def _no_show_sweep_lock(event_id: int) -> str:
@@ -95,6 +100,38 @@ def schedule_score_recalc(volunteer_id: int) -> None:
     )
 
 
+def schedule_autopsy_prompt(event_id: int) -> None:
+    """Fires right after an event completes: a job (not a synchronous call) creates the
+    notification, same as expire_assignment does for assignment-expiry notifications."""
+    _best_effort(
+        f"schedule_autopsy_prompt({event_id})",
+        lambda: send_autopsy_prompt.defer(event_id=event_id),
+    )
+
+
+def schedule_autopsy_reminder(event_id: int) -> None:
+    """One-shot reminder 48h after completion, cancelled early if the autopsy is submitted first."""
+    _best_effort(
+        f"schedule_autopsy_reminder({event_id})",
+        lambda: send_autopsy_reminder.configure(
+            queueing_lock=_autopsy_reminder_lock(event_id),
+            schedule_at=datetime.now(timezone.utc) + timedelta(hours=AUTOPSY_REMINDER_DELAY_HOURS),
+        ).defer(event_id=event_id),
+    )
+
+
+def cancel_autopsy_reminder(event_id: int) -> None:
+    def _delete() -> None:
+        with SessionLocal() as db:
+            db.execute(
+                text("DELETE FROM procrastinate_jobs WHERE queueing_lock = :lock AND status = 'todo'"),
+                {"lock": _autopsy_reminder_lock(event_id)},
+            )
+            db.commit()
+
+    _best_effort(f"cancel_autopsy_reminder({event_id})", _delete)
+
+
 @app.task(name="expire_assignment")
 def expire_assignment(assignment_id: int) -> None:
     with SessionLocal() as db:
@@ -130,6 +167,51 @@ def sweep_no_shows(event_id: int) -> None:
         )
         for booking in bookings:
             booking.status = BookingStatus.no_show
+        db.commit()
+
+
+@app.task(name="send_autopsy_prompt")
+def send_autopsy_prompt(event_id: int) -> None:
+    from app.modules.events.models import Event
+
+    with SessionLocal() as db:
+        event = db.get(Event, event_id)
+        if event is None:
+            return
+        notifications_service.notify(
+            db,
+            recipient_type=NotificationRecipientType.staff,
+            recipient_id=event.lead_id,
+            title=f"Fill the autopsy for {event.title}",
+            body="This event is complete — add a quick autopsy while it's fresh.",
+            action_type="autopsy_fill",
+            action_ref=event.id,
+        )
+        db.commit()
+
+
+@app.task(name="send_autopsy_reminder")
+def send_autopsy_reminder(event_id: int) -> None:
+    from sqlalchemy import select
+
+    from app.modules.events.models import Event
+    from app.modules.knowledge.models import EventAutopsy
+
+    with SessionLocal() as db:
+        event = db.get(Event, event_id)
+        if event is None:
+            return
+        if db.scalar(select(EventAutopsy).where(EventAutopsy.event_id == event_id)) is not None:
+            return
+        notifications_service.notify(
+            db,
+            recipient_type=NotificationRecipientType.staff,
+            recipient_id=event.lead_id,
+            title=f"Reminder: fill the autopsy for {event.title}",
+            body="It's been 48 hours and this event still has no autopsy.",
+            action_type="autopsy_fill",
+            action_ref=event.id,
+        )
         db.commit()
 
 

@@ -7,9 +7,9 @@ from app.core.config import settings
 from app.jobs.procrastinate_app import app as procrastinate_app
 from app.modules.contacts.router import router as contacts_router
 from app.modules.events.router import router as events_router
+from app.modules.knowledge.router import router as knowledge_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.org.router import router as org_router
-from app.modules.reports.router import router as reports_router
 from app.modules.volunteers.router import router as volunteers_router
 
 
@@ -36,7 +36,7 @@ app.include_router(events_router)
 app.include_router(contacts_router)
 app.include_router(volunteers_router)
 app.include_router(notifications_router)
-app.include_router(reports_router)
+app.include_router(knowledge_router)
 
 
 @app.get("/health")

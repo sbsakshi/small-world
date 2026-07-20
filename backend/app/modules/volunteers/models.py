@@ -69,6 +69,8 @@ class VolunteerAssignment(TimestampMixin, Base):
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Per-event "passport" note the coordinator leaves for whoever assigns this volunteer next.
     coordinator_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Written through from the event autopsy form, staff-only (never volunteer-visible).
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     event = relationship("Event")
     volunteer = relationship("Volunteer")

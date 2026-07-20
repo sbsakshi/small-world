@@ -9,9 +9,9 @@ from app.core.db import Base
 # Import every module's models so Base.metadata knows about all tables.
 from app.modules.contacts import models as contacts_models  # noqa: F401
 from app.modules.events import models as events_models  # noqa: F401
+from app.modules.knowledge import models as knowledge_models  # noqa: F401
 from app.modules.notifications import models as notifications_models  # noqa: F401
 from app.modules.org import models as org_models  # noqa: F401
-from app.modules.reports import models as reports_models  # noqa: F401
 from app.modules.volunteers import models as volunteers_models  # noqa: F401
 
 BASE_DATABASE_URL = os.environ.get(

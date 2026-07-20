@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { logout, type CurrentUser } from "@/lib/api";
 import { Avatar } from "@/components/ui/Avatar";
+import { NotificationsBell } from "@/components/NotificationsBell";
 
 const ROLE_LABEL: Record<string, string> = {
   founder: "Founder",
@@ -44,6 +45,7 @@ export function StaffHeader({ user }: { user: CurrentUser }) {
         </span>
       </Link>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <NotificationsBell />
         <div style={{ textAlign: "right" }}>
           <div style={{ font: "var(--w-bold) 13px/1.3 var(--font)", color: "var(--ink)" }}>{user.name}</div>
           <div style={{ font: "var(--w-medium) 11.5px/1.3 var(--font)", color: "var(--text-faint)" }}>

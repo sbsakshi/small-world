@@ -752,7 +752,6 @@ function NewEventForm({
           </Field>
         </div>
       </div>
-      {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
       <ModalActions>
         <Button type="button" size="sm" variant="secondary" onClick={onCancel}>
           Cancel
@@ -810,13 +809,11 @@ function DecisionsTab({
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!title.trim() || !body.trim()) return;
     setSubmitting(true);
-    setError(null);
     try {
       await createDecision({
         city_id: cityId,
@@ -827,9 +824,10 @@ function DecisionsTab({
       setTitle("");
       setBody("");
       setShowForm(false);
+      toastSuccess("Decision logged.");
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't raise this decision.");
+      toastError(err instanceof ApiError ? err.message : "Couldn't raise this decision.");
     } finally {
       setSubmitting(false);
     }
@@ -852,7 +850,6 @@ function DecisionsTab({
             <Field label="Why? (the reasoning behind it)">
               <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="What was decided and why…" style={fieldStyle} />
             </Field>
-            {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
             <ModalActions>
               <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
                 Cancel
@@ -907,7 +904,6 @@ function IssuesTab({
   const [body, setBody] = useState("");
   const [venueId, setVenueId] = useState<number | "">(venues[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
   const [resolutionNote, setResolutionNote] = useState("");
 
@@ -915,15 +911,15 @@ function IssuesTab({
     e.preventDefault();
     if (!title.trim() || !body.trim() || !venueId) return;
     setSubmitting(true);
-    setError(null);
     try {
       await createIssue({ title: title.trim(), body: body.trim(), venue_id: Number(venueId) });
       setTitle("");
       setBody("");
       setShowForm(false);
+      toastSuccess("Issue raised.");
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't raise this issue.");
+      toastError(err instanceof ApiError ? err.message : "Couldn't raise this issue.");
     } finally {
       setSubmitting(false);
     }
@@ -932,9 +928,10 @@ function IssuesTab({
   async function onEscalate(id: number) {
     try {
       await escalateIssue(id);
+      toastSuccess("Issue escalated.");
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't escalate this issue.");
+      toastError(err instanceof ApiError ? err.message : "Couldn't escalate this issue.");
     }
   }
 
@@ -944,9 +941,10 @@ function IssuesTab({
       await resolveIssue(id, resolutionNote.trim());
       setResolvingId(null);
       setResolutionNote("");
+      toastSuccess("Issue resolved.");
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't resolve this issue.");
+      toastError(err instanceof ApiError ? err.message : "Couldn't resolve this issue.");
     }
   }
 
@@ -978,7 +976,6 @@ function IssuesTab({
                 ))}
               </select>
             </Field>
-            {error ? <div style={{ font: "var(--w-medium) 13px/1.4 var(--font)", color: "var(--warn-ink)" }}>{error}</div> : null}
             <ModalActions>
               <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
                 Cancel

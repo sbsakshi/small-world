@@ -4,7 +4,7 @@ import pytest
 
 from app.jobs.tasks import send_autopsy_prompt, send_autopsy_reminder
 from app.modules.events.models import EventCategory
-from app.modules.events.service import complete_event, create_event, publish_event
+from app.modules.events.service import close_door, create_event, publish_event
 from app.modules.knowledge.models import IssueLevel, IssueStatus
 from app.modules.knowledge.schemas import AutopsyVolunteerRatingIn
 from app.modules.knowledge.service import (
@@ -95,8 +95,10 @@ def world(db, founder):
 
 
 def _complete(db, founder, event):
+    """Publishes and closes the door, leaving the event in `awaiting_review` — ready for
+    `submit_autopsy`, which is now the only thing that actually flips it to `closed`."""
     publish_event(db, founder, event.id)
-    return complete_event(db, founder, event.id)
+    return close_door(db, founder, event.id)
 
 
 # --- Event autopsies ------------------------------------------------------
@@ -115,7 +117,7 @@ def test_autopsy_submission_is_unique_per_event(db, founder, world):
         )
 
 
-def test_autopsy_requires_completed_event(db, founder, world):
+def test_autopsy_requires_awaiting_review_event(db, founder, world):
     with pytest.raises(InvalidTransition):
         submit_autopsy(
             db, founder, world["event"].id, attendance_actual=1, venue_rating=1,
@@ -139,18 +141,21 @@ def test_autopsy_writes_through_volunteer_ratings_in_one_transaction(db, founder
     respond_to_assignment(db, world["volunteer"].id, assignment.id, accept=True)
     event = _complete(db, founder, world["event"])
 
-    autopsy, rated_volunteer_ids = submit_autopsy(
+    autopsy, rated_volunteer_ids, honored_volunteer_ids = submit_autopsy(
         db, founder, event.id, attendance_actual=15, venue_rating=5,
         what_worked="Great crowd", what_didnt="Nothing",
         volunteer_ratings=[AutopsyVolunteerRatingIn(assignment_id=assignment.id, rating=5, coordinator_note="Ace")],
     )
 
     assert rated_volunteer_ids == [world["volunteer"].id]
+    assert honored_volunteer_ids == [world["volunteer"].id]
     db.refresh(assignment)
     assert assignment.rating == 5
     assert assignment.coordinator_note == "Ace"
     fetched = get_autopsy(db, event.id)
     assert fetched.id == autopsy.id
+    db.refresh(event)
+    assert event.status.value == "closed"
 
 
 def test_autopsy_rejects_rating_for_assignment_from_another_event(db, founder, world):

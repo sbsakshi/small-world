@@ -25,6 +25,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://smallworld:smallworld@postgres:5432/smallworld
       PROCRASTINATE_DATABASE_URL: postgresql://smallworld:smallworld@postgres:5432/smallworld
+      FRONTEND_URL: https://${CODESPACE_NAME}-3000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,7 +52,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: https://${CODESPACE_NAME}-8000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}
     depends_on:
       - backend
 

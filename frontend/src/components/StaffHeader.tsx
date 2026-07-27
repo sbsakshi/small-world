@@ -45,6 +45,34 @@ export function StaffHeader({ user }: { user: CurrentUser }) {
         </span>
       </Link>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <Link
+          href="/today"
+          style={{
+            font: "var(--w-bold) 12.5px/1 var(--font)",
+            color: "var(--text-body)",
+            textDecoration: "none",
+            padding: "8px 12px",
+            borderRadius: "var(--r-md)",
+            background: "var(--surface-sunken)",
+          }}
+        >
+          Today
+        </Link>
+        {user.role === "founder" ? (
+          <Link
+            href="/metrics"
+            style={{
+              font: "var(--w-bold) 12.5px/1 var(--font)",
+              color: "var(--text-body)",
+              textDecoration: "none",
+              padding: "8px 12px",
+              borderRadius: "var(--r-md)",
+              background: "var(--surface-sunken)",
+            }}
+          >
+            Metrics
+          </Link>
+        ) : null}
         <NotificationsBell />
         <div style={{ textAlign: "right" }}>
           <div style={{ font: "var(--w-bold) 13px/1.3 var(--font)", color: "var(--ink)" }}>{user.name}</div>

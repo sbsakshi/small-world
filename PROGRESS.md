@@ -90,3 +90,65 @@ _Added 2026-07-20._ Builds a new `knowledge/` module (event autopsies, decisions
 - Tests: `backend/tests/test_knowledge.py` (autopsy uniqueness/scoping/write-through, prompt+reminder job behavior, decision write-access, issue escalation ladder/resolve/visibility, 60-day pattern count) plus two router-level tests in `test_routers.py` updated for the new endpoints.
 - Frontend: `lib/api.ts`'s decisions/issues/event-report client replaced with the new autopsy/decision/issue shapes; the three pages that were already wired to the old endpoints (`cities/page.tsx`, `cities/[cityId]/page.tsx`, `cities/[cityId]/events/[eventId]/page.tsx`) updated to match — Decisions tab (title/body/decided_at, no decide workflow), Issues tab (title/body/venue tag, escalate + resolve-with-note, issue age instead of priority), event page's autopsy form (structured fields + per-accepted-volunteer rating). `npx tsc --noEmit` and `npm run build` both clean.
 - Not built (matches "composed views only, no new storage" from the handoff): dedicated venue-page autopsy/decision/issue sections and a founder-facing pending-autopsies dashboard widget — the backend queries for both (`list_autopsies_for_venue`, `list_pending_autopsies`, issue venue/event filters) exist and are exposed via the API, just not yet surfaced in a frontend screen.
+
+---
+
+## Backlog — flagged during tech/product walkthrough (2026-07-21)
+
+Found by comparing the owner's mental model of the event/volunteer lifecycle against the actual code. Plumbing (jobs, `notifications_service.notify`) already exists for all three to-dos below — they're missing call sites, not new systems.
+
+### To-dos (gaps vs. intended behavior)
+
+_Items 1–8 done, 2026-07-22 — see below. 9–11 still open._
+
+1. ~~**No notification when an event is created/published telling the lead to assign volunteers.**~~ — DONE. `events/service.create_event` and `publish_event` now call `notifications_service.notify` (staff recipient = `event.lead_id`, `action_type` `event_created`/`event_published`) right after each commit.
+2. ~~**No notification to the volunteer when they're assigned.**~~ — DONE. `volunteers/router.create_assignment` notifies the volunteer (`action_type="assignment_created"`) right after `schedule_assignment_expiry`.
+3. ~~**No notification to the lead on an explicit decline.**~~ — DONE. `respond_to_assignment` notifies `assignment.assigned_by` (`action_type="assignment_declined"`) when `accept` is false; accept still only recalculates score, no double-notify.
+4. ~~**Volunteers need door check-in access.**~~ — DONE. `contacts/router.py`'s checkin/close-door/door-roster routes now use `get_current_user` + a shared `events.service._ensure_door_access` check (staff via normal event-access rules, or a volunteer with an accepted `VolunteerAssignment` for that event). New `GET /events/{id}/door-roster` (denormalized guest name/phone, since volunteers can't hit the staff-only `/contacts` directory) backs a new volunteer-facing screen at `frontend/src/app/volunteer/checkin/[eventId]/page.tsx`, linked from each accepted shift on `/volunteer`. The existing staff checkin page also gained a "Close the door" button.
+5. ~~**Venue detail page.**~~ — DONE. Added `GET /venues/{id}` (`org/service.get_venue`) and a new `frontend/src/app/cities/[cityId]/venues/[venueId]/page.tsx` showing venue info, past (`closed`) events, and each one's autopsy via `listVenueAutopsies`. Venue names on the city page now link there.
+6. ~~**Real event-lifecycle status, driven by ground-truth actions.**~~ — DONE. `EventStatus` is now `draft, published, started, awaiting_review, closed, cancelled` (migration `bae21774dc3b`, renames the old `completed` value to `closed` via `ALTER TYPE ... RENAME VALUE` and adds the two new values + `Event.started_at`). First successful check-in calls `events.service.mark_started`. A new `close_door` (staff or the assigned/accepted volunteer) moves `published`/`started` → `awaiting_review` and fires `schedule_autopsy_prompt`/`schedule_autopsy_reminder` — no bookkeeping yet. **Decided during implementation**: the old standalone staff "complete" action is kept, but repurposed as an override that reaches `awaiting_review` directly (same `close_door` function, staff callers skip needing an actual check-in first) rather than being removed — there's still exactly one moment of truth for completion. `knowledge/service.submit_autopsy` is now that moment: requires `awaiting_review`, marks still-`confirmed` bookings `no_show`, sets `event.status = closed`, and returns the accepted-assignment volunteer ids so the router can bump `events_done` + schedule score recalc.
+7. ~~**"Today's events" view with live status.**~~ — DONE. New `frontend/src/app/today/page.tsx` (linked from `StaffHeader`), client-filters `listEvents()` (already role-scoped server-side) to today's `starts_at`, showing the live status badge per event.
+8. ~~**Unified Decisions+Issues feed.**~~ — DONE. `cities/[cityId]/page.tsx`'s separate Decisions/Issues tabs are replaced by one "Activity" tab merging both lists (sorted by `created_at` desc, each row tagged with a type `Badge`), with separate "+ Add decision"/"+ Add issue" actions since the underlying models are unchanged.
+9. **Comment/reply threads on both Decisions and Issues** (confirmed intended, 2026-07-21) — "consider it like a reddit/slack thread." Needs a new comment model (polymorphic to decision_id/issue_id, or two parallel tables), author (staff or volunteer, same polymorphic pattern as `Issue.raised_by_type`), body, created_at. Anyone can comment, same as anyone can create the issue/decision itself.
+   - **Implementation note**: for "feels live" updates, reuse the existing pattern already in this codebase — `NotificationsBell.tsx` polls `GET /notifications` every 30s; do the same for an open thread (poll on an interval while the thread is open) rather than reaching for WebSockets/SSE. Webhooks are the wrong tool entirely — those are for server-to-server callbacks to *external* systems (e.g. actually posting into a real Slack channel), not for pushing updates to your own open browser tabs. Real push (WebSockets) is worth revisiting only if polling staleness becomes an actual problem with real concurrent usage.
+10. **Freeform tags on issues/decisions** (confirmed intended, 2026-07-21) — today `Issue` tagging is only the three FK columns (`event_id`/`venue_id`/`volunteer_id`), no ad-hoc tag list. Add a generic tag field/list.
+11. **Explicit "ping specific people"** (confirmed intended, 2026-07-21) — let the author pick individual staff/volunteer recipients on an issue/decision/comment, notifying exactly them via the existing `notifications_service.notify()` — same primitive already used for the escalation-ladder auto-notify (`knowledge/service._notify_level_holders`), just with an explicit recipient list instead of a derived one.
+
+### Confirmed as already matching intent (2026-07-21) — no change needed, re: Decisions/Issues
+- **Anyone can create an issue** — `create_issue` has no role check today (any authenticated staff or volunteer), matches "anyone" as described.
+- **Founder/lead can close an issue** — `resolve_issue`'s `_can_act_on_issue` already gates this to founder (always), city_lead (unless already escalated to founder), or the specific event_lead (only while it's at their level) — matches "founder/lead can close" as described.
+
+### Confirmed as already matching intent (2026-07-21) — no change needed
+- Event autopsy scope: venue review (`venue_rating`), volunteer review (per-assignment `rating`), and event/crowd review (`what_worked`/`what_didnt`) are all already captured in one autopsy — matches intent as-is.
+- Decisions/Issues are intentionally a separate system from the autopsy/venue-history feature above — not to be conflated.
+
+### Future scope (bigger, unscoped features — explicitly deferred, not to-dos)
+1. **Recurring/repeating events** (e.g. "every Tuesday") — doesn't exist; only one-at-a-time `duplicate_event` today.
+2. **Volunteer recommendation engine** — rank/filter the roster by category-skill match and `cached_score` when assigning. Data exists (`Volunteer.skills`, `cached_score`); `list_volunteers` only filters by city today, no ranking.
+3. **Auto-push events to BMS/District** at a scheduled time (booking `source` enum already reserves `bms`/`district` for bookings coming back the other way).
+4. **Scan participant QR at check-in** — as an alternative/complement to manual entry and CSV-imported booking lookup at the door.
+5. **Late-start alerts** — if an event's `starts_at` passes with no check-in yet (still `upcoming` well past its start time), alert someone. Flagged 2026-07-21, explicitly not now.
+6. **Performance page** — flagged 2026-07-21 alongside the Decisions/Issues discussion, no shape defined yet (likely rolls up autopsy ratings, issue counts, volunteer reliability across events/venues). Explicitly future, not now.
+
+
+#id pass 
+Role	Name	login_identifier	password
+founder	Founder One	founder	password123
+city_lead	Priya Nair (Mumbai)	priya	password123
+city_lead	Naina Pillai (Bangalore)	naina	password123
+event_lead	Kavya Menon (Mumbai)	kavya	password123
+volunteer	Riya Malhotra (Mumbai)	riya	password123
+volunteer	Aditya Kapoor (Mumbai)	aditya	password123
+volunteer	Meera Krishnan (Mumbai)	meera	password123
+volunteer	Ishaan Verma (Bangalore)	ishaan	password123
+event_lead	Rohan Shetty (Bangalore)	rohan	password123
+city_lead	Ananya Kapoor (Delhi)	ananya	password123
+volunteer	Simran Oberoi (Mumbai)	simran	password123
+volunteer	Dev Anand (Mumbai, inactive)	dev	password123
+volunteer	Tanvi Rao (Bangalore)	tanvi	password123
+volunteer	Karan Bhatia (Bangalore)	karan	password123
+volunteer	Neha Joshi (Bangalore)	neha	password123
+volunteer	Arjun Malhotra (Delhi)	arjun	password123
+volunteer	Sana Iyer (Delhi)	sana	password123
+
+Demo dataset now spans 3 cities (Mumbai=mature/healthy, Bangalore=growing/mixed, Delhi=new/rocky launch) with 14 events across every lifecycle status (draft/published/started/awaiting_review/closed/cancelled), bookings across every source/status, volunteer assignments across every status with ratings, 5 event autopsies, 4 decisions, 4 issues, and a few notifications. Re-seed via `docker compose exec backend python -m app.scripts.seed` (no-ops if a city already exists — truncate the app tables first to reseed on top of old data).

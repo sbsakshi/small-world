@@ -143,7 +143,7 @@ def test_decisions_role_gating(client, event_lead, city):
     assert res.status_code == 403
 
 
-def test_autopsy_requires_completed_event(client, founder, event_lead, city, db):
+def test_autopsy_requires_awaiting_review_event(client, founder, event_lead, city, db):
     venue = create_venue(db, _as_user(founder, StaffRole.founder, None), name="V", city_id=city.id, address="A", capacity=5)
     _login(client, "founder-router")
     res = client.post(
@@ -166,3 +166,83 @@ def test_autopsy_requires_completed_event(client, founder, event_lead, city, db)
         json={"attendance_actual": 10, "venue_rating": 4, "what_worked": "Good", "what_didnt": "Bad"},
     )
     assert res.status_code == 409
+
+
+def test_assignment_create_notifies_volunteer_and_decline_notifies_assigner(client, founder, event_lead, volunteer, city, db):
+    venue = create_venue(db, _as_user(founder, StaffRole.founder, None), name="V", city_id=city.id, address="A", capacity=5)
+    _login(client, "founder-router")
+    res = client.post(
+        "/events",
+        json={
+            "title": "Night",
+            "category": "art",
+            "city_id": city.id,
+            "venue_id": venue.id,
+            "starts_at": "2026-08-01T18:00:00Z",
+            "capacity": 5,
+            "lead_id": event_lead.id,
+        },
+    )
+    event_id = res.json()["id"]
+
+    res = client.post("/assignments", json={"event_id": event_id, "volunteer_id": volunteer.id})
+    assert res.status_code == 200
+    assignment_id = res.json()["id"]
+
+    _login(client, "vol-router")
+    inbox = client.get("/notifications").json()
+    assert [n["action_type"] for n in inbox] == ["assignment_created"]
+
+    res = client.post(f"/assignments/{assignment_id}/respond", json={"accept": False})
+    assert res.status_code == 200
+
+    _login(client, "founder-router")
+    inbox = client.get("/notifications").json()
+    assert [n["action_type"] for n in inbox] == ["assignment_declined"]
+
+
+def test_volunteer_can_checkin_and_close_door_only_when_assigned(client, founder, event_lead, volunteer, city, db):
+    from app.modules.contacts.service import create_manual_booking
+
+    venue = create_venue(db, _as_user(founder, StaffRole.founder, None), name="V", city_id=city.id, address="A", capacity=5)
+    _login(client, "founder-router")
+    res = client.post(
+        "/events",
+        json={
+            "title": "Night",
+            "category": "art",
+            "city_id": city.id,
+            "venue_id": venue.id,
+            "starts_at": "2026-08-01T18:00:00Z",
+            "capacity": 5,
+            "lead_id": event_lead.id,
+        },
+    )
+    event_id = res.json()["id"]
+    client.post(f"/events/{event_id}/publish")
+    booking = create_manual_booking(db, event_id=event_id, phone="9876543299", name="Guest", email=None, amount=0)
+
+    _login(client, "vol-router")
+    res = client.post(f"/events/{event_id}/checkin/{booking.id}")
+    assert res.status_code == 403
+    res = client.get(f"/events/{event_id}/door-roster")
+    assert res.status_code == 403
+
+    _login(client, "founder-router")
+    res = client.post("/assignments", json={"event_id": event_id, "volunteer_id": volunteer.id})
+    assignment_id = res.json()["id"]
+
+    _login(client, "vol-router")
+    client.post(f"/assignments/{assignment_id}/respond", json={"accept": True})
+
+    res = client.get(f"/events/{event_id}/door-roster")
+    assert res.status_code == 200
+    assert res.json() == [{"booking_id": booking.id, "name": "Guest", "phone": "+919876543299", "status": "confirmed"}]
+
+    res = client.post(f"/events/{event_id}/checkin/{booking.id}")
+    assert res.status_code == 200
+    assert res.json()["status"] == "checked_in"
+
+    res = client.post(f"/events/{event_id}/close-door")
+    assert res.status_code == 200
+    assert res.json()["status"] == "awaiting_review"

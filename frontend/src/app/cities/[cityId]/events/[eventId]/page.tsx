@@ -15,7 +15,7 @@ import {
   submitAutopsy,
   publishEvent,
   cancelEvent,
-  completeEvent,
+  closeDoor,
   createAssignment,
   createManualBooking,
   importBookingsCsv,
@@ -57,10 +57,19 @@ function ModalActions({ children }: { children: React.ReactNode }) {
   return <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>{children}</div>;
 }
 
-const STATUS_LABEL: Record<string, string> = { draft: "draft", published: "upcoming", completed: "completed", cancelled: "cancelled" };
+const STATUS_LABEL: Record<string, string> = {
+  draft: "draft",
+  published: "upcoming",
+  started: "started",
+  awaiting_review: "awaiting review",
+  closed: "closed",
+  cancelled: "cancelled",
+};
 const STATUS_TONE: Record<string, "decided" | "open" | "staff"> = {
-  completed: "decided",
+  closed: "decided",
   published: "open",
+  started: "open",
+  awaiting_review: "staff",
   draft: "staff",
   cancelled: "staff",
 };
@@ -110,7 +119,7 @@ export default function EventDetailPage() {
         setVolunteers(vols);
         setBookings(bks);
         setContacts(cts);
-        if (e.status === "completed") {
+        if (e.status === "awaiting_review" || e.status === "closed") {
           try {
             setAutopsy(await getAutopsy(eventId));
           } catch {
@@ -177,12 +186,12 @@ export default function EventDetailPage() {
                 Publish
               </Button>
             ) : null}
-            {event.status === "published" ? (
-              <Button size="sm" variant="dark" onClick={() => runAction(() => completeEvent(event.id))}>
-                Close out event
+            {event.status === "published" || event.status === "started" ? (
+              <Button size="sm" variant="dark" onClick={() => runAction(() => closeDoor(event.id))}>
+                Close the door
               </Button>
             ) : null}
-            {event.status === "draft" || event.status === "published" ? (
+            {event.status === "draft" || event.status === "published" || event.status === "started" ? (
               <Button size="sm" variant="secondary" onClick={() => runAction(() => cancelEvent(event.id))}>
                 Cancel event
               </Button>
@@ -213,7 +222,7 @@ export default function EventDetailPage() {
           {venue?.name} · {venue?.address} · {fmtDate(event.starts_at)} · capacity {event.capacity}
         </div>
 
-        {event.status === "completed" ? (
+        {event.status === "awaiting_review" || event.status === "closed" ? (
           <AutopsyBox
             eventId={event.id}
             autopsy={autopsy}
@@ -224,8 +233,9 @@ export default function EventDetailPage() {
         ) : (
           <div
             style={{
-              background: event.status === "published" ? "var(--accent-tint-2)" : "var(--surface)",
-              border: `1px solid ${event.status === "published" ? "var(--accent-tint-border)" : "var(--border)"}`,
+              background:
+                event.status === "published" || event.status === "started" ? "var(--accent-tint-2)" : "var(--surface)",
+              border: `1px solid ${event.status === "published" || event.status === "started" ? "var(--accent-tint-border)" : "var(--border)"}`,
               borderRadius: "var(--r-lg)",
               padding: "18px 20px",
               marginBottom: 28,
@@ -235,9 +245,11 @@ export default function EventDetailPage() {
           >
             {event.status === "published"
               ? "This event is published. The assigned volunteer can check people in from their shift view once it starts."
-              : event.status === "cancelled"
-                ? "This event was cancelled."
-                : "This event hasn't been published yet — no report until it's checked in and closed out."}
+              : event.status === "started"
+                ? "Check-in is underway. Once the last guest is in, close the door to prompt the lead for a review."
+                : event.status === "cancelled"
+                  ? "This event was cancelled."
+                  : "This event hasn't been published yet — no report until it's checked in and closed out."}
           </div>
         )}
 
@@ -279,7 +291,7 @@ export default function EventDetailPage() {
               </Link>
             ))
           )}
-          {event.status === "draft" || event.status === "published" ? (
+          {event.status === "draft" || event.status === "published" || event.status === "started" ? (
             <div style={{ marginTop: 12 }}>
               <AssignVolunteerForm
                 eventId={event.id}
@@ -291,7 +303,7 @@ export default function EventDetailPage() {
           ) : null}
         </div>
 
-        {event.status === "published" ? (
+        {event.status === "published" || event.status === "started" ? (
           <div>
             <div
               style={{

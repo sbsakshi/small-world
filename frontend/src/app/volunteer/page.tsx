@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import {
   logout,
@@ -163,24 +164,49 @@ export default function VolunteerPage() {
           {decided.length === 0 ? (
             <EmptyCard>No shifts yet.</EmptyCard>
           ) : (
-            decided.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 16px",
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--r-lg)",
-                  marginBottom: 8,
-                }}
-              >
-                <span style={{ font: "var(--w-semibold) 14.5px/1.3 var(--font)" }}>Event #{a.event_id}</span>
-                <Badge tone={a.status === "accepted" ? "decided" : "staff"}>{a.status}</Badge>
-              </div>
-            ))
+            decided.map((a) =>
+              a.status === "accepted" ? (
+                <Link
+                  key={a.id}
+                  href={`/volunteer/checkin/${a.event_id}`}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px 16px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r-lg)",
+                    marginBottom: 8,
+                    textDecoration: "none",
+                    color: "inherit",
+                  }}
+                >
+                  <span style={{ font: "var(--w-semibold) 14.5px/1.3 var(--font)" }}>Event #{a.event_id}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge tone="decided">{a.status}</Badge>
+                    <span style={{ font: "var(--w-bold) 12px/1 var(--font)", color: "var(--accent-ink)" }}>Check in ›</span>
+                  </span>
+                </Link>
+              ) : (
+                <div
+                  key={a.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px 16px",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r-lg)",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span style={{ font: "var(--w-semibold) 14.5px/1.3 var(--font)" }}>Event #{a.event_id}</span>
+                  <Badge tone="staff">{a.status}</Badge>
+                </div>
+              )
+            )
           )}
 
           <div style={{ font: "var(--w-black) 13px/1 var(--font)", letterSpacing: "0.02em", color: "var(--text-muted)", margin: "20px 4px 10px" }}>

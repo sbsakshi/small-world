@@ -102,6 +102,18 @@ def list_venues(user: CurrentUser = Depends(_org_admin), db: DBSession = Depends
     return service.list_venues(db, user)
 
 
+@venues_router.get("/{venue_id}", response_model=VenueOut)
+def get_venue(
+    venue_id: int, user: CurrentUser = Depends(_org_admin), db: DBSession = Depends(get_db)
+) -> VenueOut:
+    try:
+        return service.get_venue(db, user, venue_id)
+    except service.NotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Venue not found")
+    except service.Forbidden:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot view a venue outside your city")
+
+
 @venues_router.post("", response_model=VenueOut)
 def create_venue(
     payload: VenueCreate, user: CurrentUser = Depends(_org_admin), db: DBSession = Depends(get_db)

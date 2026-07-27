@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session as DBSession
 
+from app.modules.contacts.models import Booking, BookingStatus
 from app.modules.events.models import Event, EventCategory, EventStatus
 from app.modules.knowledge.models import Decision, EventAutopsy, Issue, IssueLevel, IssueStatus, RaisedByType
 from app.modules.notifications import service as notifications_service
@@ -63,20 +64,25 @@ def submit_autopsy(
     what_worked: str,
     what_didnt: str,
     volunteer_ratings: list,
-) -> tuple[EventAutopsy, list[int]]:
-    """Creates the autopsy and writes ratings onto matching assignments in one transaction.
+) -> tuple[EventAutopsy, list[int], list[int]]:
+    """Creates the autopsy, writes ratings onto matching assignments, and closes the event out —
+    all in one transaction. This is the one moment of truth for event completion: no-shows are
+    marked, the event flips to `closed`, and every accepted volunteer gets their `events_done`
+    bump here, regardless of whether `awaiting_review` was reached via a door-close or a staff
+    override (see `events.service.close_door`).
 
-    Returns the autopsy plus the distinct volunteer ids that were rated, so the router
-    can enqueue score-recalc jobs the same way every other job-scheduling call site does.
+    Returns the autopsy, the distinct volunteer ids that were rated, and the volunteer ids with
+    an accepted (honored) assignment, so the router can enqueue score-recalc/events-done jobs the
+    same way every other job-scheduling call site does.
     """
     event = db.get(Event, event_id)
     if event is None:
         raise NotFound
-    if event.status != EventStatus.completed:
-        raise InvalidTransition
     _ensure_autopsy_submit_access(user, event)
     if db.scalar(select(EventAutopsy).where(EventAutopsy.event_id == event_id)) is not None:
         raise AlreadyExists
+    if event.status != EventStatus.awaiting_review:
+        raise InvalidTransition
 
     autopsy = EventAutopsy(
         event_id=event_id,
@@ -102,15 +108,33 @@ def submit_autopsy(
             assignment.coordinator_note = entry.coordinator_note
         rated_volunteer_ids.append(assignment.volunteer_id)
 
+    for booking in db.scalars(
+        select(Booking).where(Booking.event_id == event_id, Booking.status == BookingStatus.confirmed)
+    ):
+        booking.status = BookingStatus.no_show
+
+    honored_assignments = list(
+        db.scalars(
+            select(VolunteerAssignment).where(
+                VolunteerAssignment.event_id == event_id,
+                VolunteerAssignment.status == AssignmentStatus.accepted,
+            )
+        )
+    )
+    honored_volunteer_ids = [a.volunteer_id for a in honored_assignments]
+
+    event.status = EventStatus.closed
+
     db.commit()
     db.refresh(autopsy)
-    return autopsy, rated_volunteer_ids
+    return autopsy, rated_volunteer_ids, honored_volunteer_ids
 
 
 def list_pending_autopsies(db: DBSession, user: CurrentUser, *, city_id: int | None = None) -> list[Event]:
-    """Completed events with no autopsy yet — computed, never a stored flag."""
+    """Events awaiting the lead's review — the door is closed but the autopsy (which is what
+    actually closes the event out) hasn't been submitted yet. Computed, never a stored flag."""
     stmt = select(Event).where(
-        Event.status == EventStatus.completed,
+        Event.status == EventStatus.awaiting_review,
         ~Event.id.in_(select(EventAutopsy.event_id)),
     )
     if user.role == StaffRole.city_lead:

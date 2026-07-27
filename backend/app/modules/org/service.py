@@ -192,6 +192,14 @@ def list_venues(db: DBSession, user: CurrentUser) -> list[Venue]:
     return list(db.scalars(stmt))
 
 
+def get_venue(db: DBSession, user: CurrentUser, venue_id: int) -> Venue:
+    venue = db.get(Venue, venue_id)
+    if venue is None:
+        raise NotFound
+    _ensure_city_access(user, venue.city_id)
+    return venue
+
+
 def create_venue(
     db: DBSession,
     user: CurrentUser,

@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DBSession
 
 from app.modules.contacts.models import Booking, BookingSource, BookingStatus, Contact
+from app.modules.events import service as events_service
 from app.modules.events.models import Event, EventStatus
+from app.modules.org.schemas import CurrentUser
 
 
 class NotFound(Exception):
@@ -123,7 +125,53 @@ def list_bookings(db: DBSession, *, event_id: int | None = None, contact_id: int
     return list(db.scalars(stmt))
 
 
-def check_in_booking(db: DBSession, *, event_id: int, booking_id: int) -> Booking:
+def list_bookings_for(
+    db: DBSession, actor: CurrentUser, *, event_id: int | None = None, contact_id: int | None = None
+) -> list[Booking]:
+    """Staff: unrestricted, same as `list_bookings`. Volunteers: must scope to a single event
+    they hold an accepted assignment for (the guest list at their own door), else Forbidden."""
+    from app.modules.org.models import SessionRecipientType
+
+    if actor.user_type == SessionRecipientType.volunteer:
+        if event_id is None:
+            raise Forbidden
+        event = db.get(Event, event_id)
+        if event is None:
+            raise NotFound
+        try:
+            events_service._ensure_door_access(db, actor, event)
+        except events_service.Forbidden:
+            raise Forbidden
+    return list_bookings(db, event_id=event_id, contact_id=contact_id)
+
+
+def list_door_roster(db: DBSession, actor: CurrentUser, *, event_id: int) -> list[dict]:
+    """Guest list for the door, with the contact name/phone denormalized onto each row — a
+    scoped alternative to the staff-only `/contacts` directory, so a volunteer can see who
+    they're checking in without being handed the full contact list."""
+    event = db.get(Event, event_id)
+    if event is None:
+        raise NotFound
+    try:
+        events_service._ensure_door_access(db, actor, event)
+    except events_service.Forbidden:
+        raise Forbidden
+    rows = db.execute(
+        select(Booking.id, Contact.name, Contact.phone, Booking.status)
+        .join(Contact, Booking.contact_id == Contact.id)
+        .where(Booking.event_id == event_id)
+    ).all()
+    return [{"booking_id": r[0], "name": r[1], "phone": r[2], "status": r[3]} for r in rows]
+
+
+def check_in_booking(db: DBSession, actor: CurrentUser, *, event_id: int, booking_id: int) -> Booking:
+    event = db.get(Event, event_id)
+    if event is None:
+        raise NotFound
+    try:
+        events_service._ensure_door_access(db, actor, event)
+    except events_service.Forbidden:
+        raise Forbidden
     booking = db.get(Booking, booking_id)
     if booking is None or booking.event_id != event_id:
         raise NotFound
@@ -131,6 +179,7 @@ def check_in_booking(db: DBSession, *, event_id: int, booking_id: int) -> Bookin
         raise InvalidTransition
     booking.status = BookingStatus.checked_in
     db.commit()
+    events_service.mark_started(db, event_id)
     db.refresh(booking)
     return booking
 

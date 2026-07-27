@@ -36,6 +36,13 @@ class BookingOut(BaseModel):
     created_at: datetime
 
 
+class DoorRosterEntry(BaseModel):
+    booking_id: int
+    name: str
+    phone: str
+    status: BookingStatus
+
+
 class ManualBookingCreate(BaseModel):
     event_id: int
     phone: str

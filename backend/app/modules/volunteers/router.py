@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.core.db import get_db
 from app.jobs import tasks as job_tasks
+from app.modules.notifications import service as notifications_service
+from app.modules.notifications.models import NotificationRecipientType
 from app.modules.org.deps import require_staff, require_volunteer
 from app.modules.org.schemas import CurrentUser
 from app.modules.volunteers import service
@@ -97,6 +99,15 @@ def create_assignment(
     except service.Forbidden:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign volunteers outside your city")
     job_tasks.schedule_assignment_expiry(assignment.id)
+    notifications_service.notify(
+        db,
+        recipient_type=NotificationRecipientType.volunteer,
+        recipient_id=assignment.volunteer_id,
+        title="You've been assigned to a shift",
+        body=assignment.coordinator_note or "Check your assignments to accept or decline.",
+        action_type="assignment_created",
+        action_ref=assignment.id,
+    )
     return assignment
 
 
@@ -115,6 +126,16 @@ def respond_to_assignment(
         raise HTTPException(status.HTTP_409_CONFLICT, "Assignment already responded to")
     job_tasks.cancel_assignment_expiry(assignment.id)
     job_tasks.schedule_score_recalc(assignment.volunteer_id)
+    if not payload.accept:
+        notifications_service.notify(
+            db,
+            recipient_type=NotificationRecipientType.staff,
+            recipient_id=assignment.assigned_by,
+            title="Assignment declined",
+            body="A volunteer declined their assignment — you may need to find a replacement.",
+            action_type="assignment_declined",
+            action_ref=assignment.id,
+        )
     return assignment
 
 

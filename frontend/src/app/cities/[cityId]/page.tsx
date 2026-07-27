@@ -39,20 +39,28 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { toastSuccess, toastError } from "@/lib/toast";
 
-type Tab = "Overview" | "Events" | "Decisions" | "Issues" | "People";
+type Tab = "Overview" | "Events" | "Activity" | "People";
 
 const NAV: { key: Tab; icon: string }[] = [
   { key: "Overview", icon: "◎" },
   { key: "Events", icon: "❏" },
-  { key: "Decisions", icon: "⚑" },
-  { key: "Issues", icon: "◆" },
+  { key: "Activity", icon: "⚑" },
   { key: "People", icon: "☷" },
 ];
 
-const STATUS_LABEL: Record<string, string> = { draft: "draft", published: "upcoming", completed: "completed", cancelled: "cancelled" };
+const STATUS_LABEL: Record<string, string> = {
+  draft: "draft",
+  published: "upcoming",
+  started: "started",
+  awaiting_review: "awaiting review",
+  closed: "closed",
+  cancelled: "cancelled",
+};
 const STATUS_TONE: Record<string, "decided" | "open" | "staff"> = {
-  completed: "decided",
+  closed: "decided",
   published: "open",
+  started: "open",
+  awaiting_review: "staff",
   draft: "staff",
   cancelled: "staff",
 };
@@ -121,8 +129,8 @@ export default function CityOverviewPage() {
 
   const refresh = () => setRefreshKey((k) => k + 1);
   const openIssues = issues.filter((i) => i.status === "open");
-  const upcomingEvents = events.filter((e) => e.status === "published");
-  const completedEvents = events.filter((e) => e.status === "completed");
+  const upcomingEvents = events.filter((e) => e.status === "published" || e.status === "started");
+  const completedEvents = events.filter((e) => e.status === "closed");
   const roleLabel = user.role === "founder" ? "full access" : user.role === "city_lead" ? "city lead" : "event lead";
 
   const oldestOpenIssue = openIssues
@@ -176,14 +184,12 @@ export default function CityOverviewPage() {
             const count =
               n.key === "Events"
                 ? String(events.length)
-                : n.key === "Decisions"
-                  ? String(decisions.length)
-                  : n.key === "Issues"
-                    ? String(openIssues.length)
-                    : n.key === "People"
-                      ? String(roster.length)
-                      : undefined;
-            const countTone = n.key === "Issues" ? "alert" : n.key === "Events" ? "accent" : "faint";
+                : n.key === "Activity"
+                  ? String(decisions.length + issues.length)
+                  : n.key === "People"
+                    ? String(roster.length)
+                    : undefined;
+            const countTone = n.key === "Activity" && openIssues.length > 0 ? "alert" : n.key === "Events" ? "accent" : "faint";
             return (
               <NavItem
                 key={n.key}
@@ -264,10 +270,9 @@ export default function CityOverviewPage() {
                 onChanged={refresh}
               />
             )}
-            {tab === "Decisions" && (
-              <DecisionsTab decisions={decisions} venues={venues} cityId={cityId} onChanged={refresh} />
+            {tab === "Activity" && (
+              <ActivityTab decisions={decisions} issues={issues} venues={venues} cityId={cityId} onChanged={refresh} />
             )}
-            {tab === "Issues" && <IssuesTab issues={issues} venues={venues} cityId={cityId} onChanged={refresh} />}
             {tab === "People" && (
               <PeopleTab
                 people={roster}
@@ -436,8 +441,8 @@ function OverviewTab({
   canManageOrg: boolean;
   onChanged: () => void;
 }) {
-  const upcoming = events.filter((e) => e.status === "published");
-  const latest = events.filter((e) => e.status === "completed")[0];
+  const upcoming = events.filter((e) => e.status === "published" || e.status === "started");
+  const latest = events.filter((e) => e.status === "closed")[0];
 
   return (
     <div>
@@ -511,12 +516,23 @@ function VenuesPanel({ venues, cityId, onChanged }: { venues: Venue[]; cityId: n
     <div>
       {venues.length === 0 ? <EmptyNote>No venues yet.</EmptyNote> : null}
       {venues.map((v) => (
-        <div key={v.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--border-faint)" }}>
+        <Link
+          key={v.id}
+          href={`/cities/${cityId}/venues/${v.id}`}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            padding: "10px 0",
+            borderBottom: "1px solid var(--border-faint)",
+            textDecoration: "none",
+            color: "inherit",
+          }}
+        >
           <span style={{ font: "var(--w-semibold) 14.5px/1 var(--font)" }}>{v.name}</span>
           <span style={{ font: "var(--w-medium) 13px/1 var(--font)", color: "var(--text-faint)" }}>
             {v.address} · capacity {v.capacity}
           </span>
-        </div>
+        </Link>
       ))}
       <div style={{ marginTop: 12 }}>
         <Button size="sm" variant="secondary" onClick={() => setShowForm(true)}>
@@ -596,9 +612,11 @@ function EventsTab({
   canCreate: boolean;
   onChanged: () => void;
 }) {
-  const upcoming = events.filter((e) => e.status === "published");
+  const upcoming = events.filter(
+    (e) => e.status === "published" || e.status === "started" || e.status === "awaiting_review"
+  );
   const drafts = events.filter((e) => e.status === "draft");
-  const past = events.filter((e) => e.status === "completed" || e.status === "cancelled");
+  const past = events.filter((e) => e.status === "closed" || e.status === "cancelled");
   const [showForm, setShowForm] = useState(false);
 
   return (
@@ -794,36 +812,155 @@ function EventRow({ event: e, venues, cityId, compact = false }: { event: Event;
   );
 }
 
-function DecisionsTab({
+function issueAgeDays(createdAt: string): number {
+  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000);
+}
+
+function DecisionRow({ decision: d, venues }: { decision: Decision; venues: Venue[] }) {
+  const edited = new Date(d.updated_at).getTime() - new Date(d.created_at).getTime() > 60_000;
+  return (
+    <div style={{ display: "flex", gap: 14, padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
+      <Badge tone="staff">decision</Badge>
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+          <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{d.decided_at}</span>
+          {d.category ? <Badge tone="staff">{d.category}</Badge> : null}
+          {d.venue_id ? <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === d.venue_id)?.name}</span> : null}
+          {edited ? <span style={{ font: "var(--w-medium) 12px/1 var(--font)", color: "var(--text-faint)" }}>edited</span> : null}
+        </div>
+        <div style={{ font: "var(--w-bold) 17px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.title}</div>
+        <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 4 }}>{d.body}</div>
+      </div>
+    </div>
+  );
+}
+
+function IssueRow({
+  issue: i,
+  venues,
+  resolvingId,
+  resolutionNote,
+  onResolutionNoteChange,
+  onEscalate,
+  onStartResolve,
+  onResolve,
+}: {
+  issue: Issue;
+  venues: Venue[];
+  resolvingId: number | null;
+  resolutionNote: string;
+  onResolutionNoteChange: (note: string) => void;
+  onEscalate: (id: number) => void;
+  onStartResolve: (id: number) => void;
+  onResolve: (id: number) => void;
+}) {
+  const age = issueAgeDays(i.created_at);
+  return (
+    <div style={{ display: "flex", gap: 14, padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
+      <span
+        style={{
+          width: 11,
+          height: 11,
+          borderRadius: "50%",
+          background: i.status === "open" && age > 7 ? "var(--priority-high)" : "var(--priority-low)",
+          marginTop: 6,
+          flexShrink: 0,
+        }}
+      />
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+          <Badge tone="open">issue</Badge>
+          <span style={{ font: "var(--w-semibold) 16px/1.4 var(--font)" }}>{i.title}</span>
+          <Badge tone={i.status === "resolved" ? "decided" : "open"}>{i.status}</Badge>
+          <Badge tone="staff">{i.current_level.replace("_", " ")}</Badge>
+          {i.venue_id ? <span style={{ font: "var(--w-medium) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === i.venue_id)?.name}</span> : null}
+        </div>
+        <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)" }}>{i.body}</div>
+        <div style={{ font: "var(--w-medium) 12.5px/1.3 var(--font)", color: age > 7 ? "var(--priority-high)" : "var(--text-faint)", marginTop: 4 }}>
+          open {age} {age === 1 ? "day" : "days"}
+        </div>
+        {i.status === "resolved" && i.resolution_note ? (
+          <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--good-ink)", marginTop: 4 }}>{i.resolution_note}</div>
+        ) : null}
+        {i.status === "open" ? (
+          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {i.current_level !== "founder" ? (
+              <Button size="sm" variant="secondary" onClick={() => onEscalate(i.id)}>
+                Escalate
+              </Button>
+            ) : null}
+            {resolvingId === i.id ? (
+              <>
+                <input
+                  value={resolutionNote}
+                  onChange={(e) => onResolutionNoteChange(e.target.value)}
+                  placeholder="Resolution note…"
+                  autoFocus
+                  style={{
+                    font: "var(--w-medium) 13px/1 var(--font)",
+                    padding: "8px 10px",
+                    border: "1px solid var(--border-strong)",
+                    borderRadius: "var(--r-md)",
+                    background: "var(--surface)",
+                    color: "var(--ink)",
+                  }}
+                />
+                <Button size="sm" disabled={!resolutionNote.trim()} onClick={() => onResolve(i.id)}>
+                  Confirm resolve
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="secondary" onClick={() => onStartResolve(i.id)}>
+                Resolve
+              </Button>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type ActivityEntry = { ts: number } & ({ type: "decision"; decision: Decision } | { type: "issue"; issue: Issue });
+
+function ActivityTab({
   decisions,
+  issues,
   venues,
   cityId,
   onChanged,
 }: {
   decisions: Decision[];
+  issues: Issue[];
   venues: Venue[];
   cityId: number;
   onChanged: () => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
+  const [showDecisionForm, setShowDecisionForm] = useState(false);
+  const [showIssueForm, setShowIssueForm] = useState(false);
+  const [decisionTitle, setDecisionTitle] = useState("");
+  const [decisionBody, setDecisionBody] = useState("");
+  const [issueTitle, setIssueTitle] = useState("");
+  const [issueBody, setIssueBody] = useState("");
+  const [issueVenueId, setIssueVenueId] = useState<number | "">(venues[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [resolutionNote, setResolutionNote] = useState("");
 
-  async function onSubmit(e: FormEvent) {
+  async function onSubmitDecision(e: FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !body.trim()) return;
+    if (!decisionTitle.trim() || !decisionBody.trim()) return;
     setSubmitting(true);
     try {
       await createDecision({
         city_id: cityId,
-        title: title.trim(),
-        body: body.trim(),
+        title: decisionTitle.trim(),
+        body: decisionBody.trim(),
         decided_at: new Date().toISOString().slice(0, 10),
       });
-      setTitle("");
-      setBody("");
-      setShowForm(false);
+      setDecisionTitle("");
+      setDecisionBody("");
+      setShowDecisionForm(false);
       toastSuccess("Decision logged.");
       onChanged();
     } catch (err) {
@@ -833,89 +970,15 @@ function DecisionsTab({
     }
   }
 
-  return (
-    <>
-      <SectionHeader title="Decisions" sub="most recent first" />
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0 20px" }}>
-        <Button size="sm" onClick={() => setShowForm(true)}>
-          + Add decision
-        </Button>
-      </div>
-      {showForm ? (
-        <Modal title="Add decision" onClose={() => setShowForm(false)} width={480}>
-          <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Field label="Title">
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Decision title…" autoFocus style={fieldStyle} />
-            </Field>
-            <Field label="Why? (the reasoning behind it)">
-              <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="What was decided and why…" style={fieldStyle} />
-            </Field>
-            <ModalActions>
-              <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" disabled={submitting || !title.trim() || !body.trim()}>
-                Raise
-              </Button>
-            </ModalActions>
-          </form>
-        </Modal>
-      ) : null}
-      {decisions.length === 0 ? (
-        <EmptyNote>No decisions logged yet.</EmptyNote>
-      ) : (
-        decisions.map((d) => {
-          const edited = new Date(d.updated_at).getTime() - new Date(d.created_at).getTime() > 60_000;
-          return (
-            <div key={d.id} style={{ padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-                <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{d.decided_at}</span>
-                {d.category ? <Badge tone="staff">{d.category}</Badge> : null}
-                {d.venue_id ? <span style={{ font: "var(--w-semibold) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === d.venue_id)?.name}</span> : null}
-                {edited ? <span style={{ font: "var(--w-medium) 12px/1 var(--font)", color: "var(--text-faint)" }}>edited</span> : null}
-              </div>
-              <div style={{ font: "var(--w-bold) 17px/1.4 var(--font)", letterSpacing: "-0.01em" }}>{d.title}</div>
-              <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)", marginTop: 4 }}>{d.body}</div>
-            </div>
-          );
-        })
-      )}
-    </>
-  );
-}
-
-function issueAgeDays(createdAt: string): number {
-  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000);
-}
-
-function IssuesTab({
-  issues,
-  venues,
-  cityId,
-  onChanged,
-}: {
-  issues: Issue[];
-  venues: Venue[];
-  cityId: number;
-  onChanged: () => void;
-}) {
-  const [showForm, setShowForm] = useState(false);
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [venueId, setVenueId] = useState<number | "">(venues[0]?.id ?? "");
-  const [submitting, setSubmitting] = useState(false);
-  const [resolvingId, setResolvingId] = useState<number | null>(null);
-  const [resolutionNote, setResolutionNote] = useState("");
-
-  async function onSubmit(e: FormEvent) {
+  async function onSubmitIssue(e: FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !body.trim() || !venueId) return;
+    if (!issueTitle.trim() || !issueBody.trim() || !issueVenueId) return;
     setSubmitting(true);
     try {
-      await createIssue({ title: title.trim(), body: body.trim(), venue_id: Number(venueId) });
-      setTitle("");
-      setBody("");
-      setShowForm(false);
+      await createIssue({ title: issueTitle.trim(), body: issueBody.trim(), venue_id: Number(issueVenueId) });
+      setIssueTitle("");
+      setIssueBody("");
+      setShowIssueForm(false);
       toastSuccess("Issue raised.");
       onChanged();
     } catch (err) {
@@ -948,27 +1011,55 @@ function IssuesTab({
     }
   }
 
+  const feed: ActivityEntry[] = [
+    ...decisions.map((decision) => ({ type: "decision" as const, decision, ts: new Date(decision.created_at).getTime() })),
+    ...issues.map((issue) => ({ type: "issue" as const, issue, ts: new Date(issue.created_at).getTime() })),
+  ].sort((a, b) => b.ts - a.ts);
+
   return (
     <>
-      <SectionHeader title="Issues" />
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0 20px" }}>
-        <Button size="sm" onClick={() => setShowForm(true)}>
+      <SectionHeader title="Activity" sub="decisions & issues, most recent first" />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, margin: "12px 0 20px" }}>
+        <Button size="sm" variant="secondary" onClick={() => setShowIssueForm(true)}>
           + Add issue
         </Button>
+        <Button size="sm" onClick={() => setShowDecisionForm(true)}>
+          + Add decision
+        </Button>
       </div>
-      {showForm ? (
-        <Modal title="Add issue" onClose={() => setShowForm(false)} width={480}>
-          <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {showDecisionForm ? (
+        <Modal title="Add decision" onClose={() => setShowDecisionForm(false)} width={480}>
+          <form onSubmit={onSubmitDecision} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field label="Title">
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Issue title…" autoFocus style={fieldStyle} />
+              <input value={decisionTitle} onChange={(e) => setDecisionTitle(e.target.value)} placeholder="Decision title…" autoFocus style={fieldStyle} />
+            </Field>
+            <Field label="Why? (the reasoning behind it)">
+              <input value={decisionBody} onChange={(e) => setDecisionBody(e.target.value)} placeholder="What was decided and why…" style={fieldStyle} />
+            </Field>
+            <ModalActions>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowDecisionForm(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={submitting || !decisionTitle.trim() || !decisionBody.trim()}>
+                Raise
+              </Button>
+            </ModalActions>
+          </form>
+        </Modal>
+      ) : null}
+      {showIssueForm ? (
+        <Modal title="Add issue" onClose={() => setShowIssueForm(false)} width={480}>
+          <form onSubmit={onSubmitIssue} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="Title">
+              <input value={issueTitle} onChange={(e) => setIssueTitle(e.target.value)} placeholder="Issue title…" autoFocus style={fieldStyle} />
             </Field>
             <Field label="What's going on?">
-              <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="Describe the issue…" style={fieldStyle} />
+              <input value={issueBody} onChange={(e) => setIssueBody(e.target.value)} placeholder="Describe the issue…" style={fieldStyle} />
             </Field>
             <Field label="Venue">
               <select
-                value={venueId}
-                onChange={(e) => setVenueId(e.target.value ? Number(e.target.value) : "")}
+                value={issueVenueId}
+                onChange={(e) => setIssueVenueId(e.target.value ? Number(e.target.value) : "")}
                 style={fieldStyle}
               >
                 {venues.map((v) => (
@@ -977,85 +1068,39 @@ function IssuesTab({
               </select>
             </Field>
             <ModalActions>
-              <Button type="button" size="sm" variant="secondary" onClick={() => setShowForm(false)}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowIssueForm(false)}>
                 Cancel
               </Button>
-              <Button type="submit" size="sm" disabled={submitting || !title.trim() || !body.trim() || !venueId}>
+              <Button type="submit" size="sm" disabled={submitting || !issueTitle.trim() || !issueBody.trim() || !issueVenueId}>
                 Raise
               </Button>
             </ModalActions>
           </form>
         </Modal>
       ) : null}
-      {issues.length === 0 ? (
-        <EmptyNote>No issues raised.</EmptyNote>
+      {feed.length === 0 ? (
+        <EmptyNote>No decisions or issues logged yet.</EmptyNote>
       ) : (
-        issues.map((i) => {
-          const age = issueAgeDays(i.created_at);
-          return (
-            <div key={i.id} style={{ display: "flex", gap: 14, padding: "18px 0", borderBottom: "1px solid var(--border)" }}>
-              <span
-                style={{
-                  width: 11,
-                  height: 11,
-                  borderRadius: "50%",
-                  background: i.status === "open" && age > 7 ? "var(--priority-high)" : "var(--priority-low)",
-                  marginTop: 6,
-                  flexShrink: 0,
-                }}
-              />
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                  <span style={{ font: "var(--w-semibold) 16px/1.4 var(--font)" }}>{i.title}</span>
-                  <Badge tone={i.status === "resolved" ? "decided" : "open"}>{i.status}</Badge>
-                  <Badge tone="staff">{i.current_level.replace("_", " ")}</Badge>
-                  {i.venue_id ? <span style={{ font: "var(--w-medium) 12.5px/1 var(--font)", color: "var(--text-faint)" }}>{venues.find((v) => v.id === i.venue_id)?.name}</span> : null}
-                </div>
-                <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--text-faint)" }}>{i.body}</div>
-                <div style={{ font: "var(--w-medium) 12.5px/1.3 var(--font)", color: age > 7 ? "var(--priority-high)" : "var(--text-faint)", marginTop: 4 }}>
-                  open {age} {age === 1 ? "day" : "days"}
-                </div>
-                {i.status === "resolved" && i.resolution_note ? (
-                  <div style={{ font: "var(--w-medium) 13px/1.3 var(--font)", color: "var(--good-ink)", marginTop: 4 }}>{i.resolution_note}</div>
-                ) : null}
-                {i.status === "open" ? (
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    {i.current_level !== "founder" ? (
-                      <Button size="sm" variant="secondary" onClick={() => onEscalate(i.id)}>
-                        Escalate
-                      </Button>
-                    ) : null}
-                    {resolvingId === i.id ? (
-                      <>
-                        <input
-                          value={resolutionNote}
-                          onChange={(e) => setResolutionNote(e.target.value)}
-                          placeholder="Resolution note…"
-                          autoFocus
-                          style={{
-                            font: "var(--w-medium) 13px/1 var(--font)",
-                            padding: "8px 10px",
-                            border: "1px solid var(--border-strong)",
-                            borderRadius: "var(--r-md)",
-                            background: "var(--surface)",
-                            color: "var(--ink)",
-                          }}
-                        />
-                        <Button size="sm" disabled={!resolutionNote.trim()} onClick={() => onResolve(i.id)}>
-                          Confirm resolve
-                        </Button>
-                      </>
-                    ) : (
-                      <Button size="sm" variant="secondary" onClick={() => { setResolvingId(i.id); setResolutionNote(""); }}>
-                        Resolve
-                      </Button>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          );
-        })
+        feed.map((entry) =>
+          entry.type === "decision" ? (
+            <DecisionRow key={`decision-${entry.decision.id}`} decision={entry.decision} venues={venues} />
+          ) : (
+            <IssueRow
+              key={`issue-${entry.issue.id}`}
+              issue={entry.issue}
+              venues={venues}
+              resolvingId={resolvingId}
+              resolutionNote={resolutionNote}
+              onResolutionNoteChange={setResolutionNote}
+              onEscalate={onEscalate}
+              onStartResolve={(id) => {
+                setResolvingId(id);
+                setResolutionNote("");
+              }}
+              onResolve={onResolve}
+            />
+          )
+        )
       )}
     </>
   );

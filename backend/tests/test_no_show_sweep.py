@@ -48,13 +48,13 @@ def test_sweep_marks_confirmed_bookings_as_no_show(db, patch_job_session, publis
     assert booking.status == BookingStatus.no_show
 
 
-def test_sweep_does_not_touch_checked_in_bookings(db, patch_job_session, published_event):
+def test_sweep_does_not_touch_checked_in_bookings(db, patch_job_session, published_event, founder):
     from app.modules.contacts.service import check_in_booking
 
     booking = create_manual_booking(
         db, event_id=published_event.id, phone="9876543211", name="Attendee", email=None, amount=0
     )
-    checked_in = check_in_booking(db, event_id=published_event.id, booking_id=booking.id)
+    checked_in = check_in_booking(db, founder, event_id=published_event.id, booking_id=booking.id)
     assert checked_in.status == BookingStatus.checked_in
 
     sweep_no_shows(published_event.id)
@@ -63,23 +63,20 @@ def test_sweep_does_not_touch_checked_in_bookings(db, patch_job_session, publish
     assert checked_in.status == BookingStatus.checked_in
 
 
-def test_sweep_is_a_no_op_for_a_completed_event(db, patch_job_session, published_event, founder):
-    from app.modules.events.service import complete_event
+def test_sweep_is_a_no_op_once_the_door_is_closed(db, patch_job_session, published_event, founder):
+    from app.modules.events.service import close_door
 
     booking = create_manual_booking(
         db, event_id=published_event.id, phone="9876543212", name="Attendee", email=None, amount=0
     )
-    completed = complete_event(db, founder, published_event.id)
-    assert completed.status == EventStatus.completed
-    # complete_event already turned confirmed bookings into no-shows; the sweep firing
-    # late for the same event must not error or double-process anything.
-    db.refresh(booking)
-    assert booking.status == BookingStatus.no_show
-
+    closed = close_door(db, founder, published_event.id)
+    assert closed.status == EventStatus.awaiting_review
+    # The sweep only ever acts on `published` events; once the door is closed (and bookkeeping
+    # deferred to the eventual autopsy submission), a late-firing sweep must not touch anything.
     sweep_no_shows(published_event.id)
 
     db.refresh(booking)
-    assert booking.status == BookingStatus.no_show
+    assert booking.status == BookingStatus.confirmed
 
 
 def test_sweep_is_a_no_op_for_nonexistent_event(db, patch_job_session):

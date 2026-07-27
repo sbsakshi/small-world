@@ -1,12 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DBSession
 
 from app.modules.contacts.models import Booking, BookingStatus
 from app.modules.events.models import Event, EventCategory, EventStatus
+from app.modules.notifications import service as notifications_service
+from app.modules.notifications.models import NotificationRecipientType
 from app.modules.org.models import StaffRole
 from app.modules.org.schemas import CurrentUser
+from app.modules.volunteers.models import AssignmentStatus, VolunteerAssignment
 
 
 class NotFound(Exception):
@@ -63,11 +66,13 @@ def list_events(
     return list(db.scalars(stmt.order_by(Event.starts_at)))
 
 
-def get_event(db: DBSession, user: CurrentUser, event_id: int) -> Event:
+def get_event(db: DBSession, actor: CurrentUser, event_id: int) -> Event:
+    """Staff use the normal event-access rules; an assigned+accepted volunteer can also read
+    their own event (needed for the door check-in screen's title/venue/capacity)."""
     event = db.get(Event, event_id)
     if event is None:
         raise NotFound
-    _ensure_event_access(user, event)
+    _ensure_door_access(db, actor, event)
     return event
 
 
@@ -98,6 +103,16 @@ def create_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+    notifications_service.notify(
+        db,
+        recipient_type=NotificationRecipientType.staff,
+        recipient_id=event.lead_id,
+        title=f"You're leading {event.title}",
+        body="A new event was created with you as lead — head over to assign volunteers.",
+        action_type="event_created",
+        action_ref=event.id,
+    )
+    db.commit()
     return event
 
 
@@ -117,7 +132,7 @@ def update_event(
     if event is None:
         raise NotFound
     _ensure_event_access(user, event)
-    if event.status in (EventStatus.completed, EventStatus.cancelled):
+    if event.status in (EventStatus.closed, EventStatus.cancelled):
         raise InvalidTransition
     if title is not None:
         event.title = title
@@ -146,6 +161,16 @@ def publish_event(db: DBSession, user: CurrentUser, event_id: int) -> Event:
     event.status = EventStatus.published
     db.commit()
     db.refresh(event)
+    notifications_service.notify(
+        db,
+        recipient_type=NotificationRecipientType.staff,
+        recipient_id=event.lead_id,
+        title=f"{event.title} is published",
+        body="It's live — make sure volunteers are assigned before the night of.",
+        action_type="event_published",
+        action_ref=event.id,
+    )
+    db.commit()
     return event
 
 
@@ -157,7 +182,7 @@ def cancel_event(db: DBSession, user: CurrentUser, event_id: int) -> Event:
     _ensure_event_access(user, event)
     if event.status == EventStatus.cancelled:
         raise InvalidTransition
-    if event.status == EventStatus.completed:
+    if event.status == EventStatus.closed:
         raise InvalidTransition
     event.status = EventStatus.cancelled
     non_terminal = (
@@ -173,19 +198,48 @@ def cancel_event(db: DBSession, user: CurrentUser, event_id: int) -> Event:
     return event
 
 
-def complete_event(db: DBSession, user: CurrentUser, event_id: int) -> Event:
-    """Closes out a live event: confirmed-but-not-checked-in bookings become no-shows."""
+def mark_started(db: DBSession, event_id: int) -> Event | None:
+    """First successful check-in flips a published event to started. No-ops past that point
+    (repeat check-ins never re-trigger it) — called from contacts.service.check_in_booking."""
+    event = db.get(Event, event_id)
+    if event is None or event.status != EventStatus.published:
+        return None
+    event.status = EventStatus.started
+    event.started_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _ensure_door_access(db: DBSession, actor: CurrentUser, event: Event) -> None:
+    """Door actions (check-in, close-door): staff via the normal event-access rules, or the
+    volunteer themself if they hold an accepted assignment for this event."""
+    from app.modules.org.models import SessionRecipientType
+
+    if actor.user_type == SessionRecipientType.staff:
+        _ensure_event_access(actor, event)
+        return
+    assigned = db.scalar(
+        select(VolunteerAssignment).where(
+            VolunteerAssignment.event_id == event.id,
+            VolunteerAssignment.volunteer_id == actor.id,
+            VolunteerAssignment.status == AssignmentStatus.accepted,
+        )
+    )
+    if assigned is None:
+        raise Forbidden
+
+
+def close_door(db: DBSession, actor: CurrentUser, event_id: int) -> Event:
+    """Volunteer (or staff) signal that check-ins are done for the night. Does not do any
+    bookkeeping — that only happens once the lead submits the event's autopsy."""
     event = db.get(Event, event_id)
     if event is None:
         raise NotFound
-    _ensure_event_access(user, event)
-    if event.status != EventStatus.published:
+    _ensure_door_access(db, actor, event)
+    if event.status not in (EventStatus.published, EventStatus.started):
         raise InvalidTransition
-    event.status = EventStatus.completed
-    for booking in db.scalars(
-        select(Booking).where(Booking.event_id == event_id, Booking.status == BookingStatus.confirmed)
-    ):
-        booking.status = BookingStatus.no_show
+    event.status = EventStatus.awaiting_review
     db.commit()
     db.refresh(event)
     return event

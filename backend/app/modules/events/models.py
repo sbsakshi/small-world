@@ -18,7 +18,9 @@ class EventCategory(str, enum.Enum):
 class EventStatus(str, enum.Enum):
     draft = "draft"
     published = "published"
-    completed = "completed"
+    started = "started"
+    awaiting_review = "awaiting_review"
+    closed = "closed"
     cancelled = "cancelled"
 
 
@@ -37,6 +39,8 @@ class Event(TimestampMixin, Base):
     status: Mapped[EventStatus] = mapped_column(
         SAEnum(EventStatus, name="event_status"), default=EventStatus.draft
     )
+    # Set once, the first time a check-in succeeds against this event (draft -> published -> started).
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     city = relationship("City")
     venue = relationship("Venue")

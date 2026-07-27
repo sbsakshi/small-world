@@ -19,6 +19,7 @@ from app.modules.knowledge.schemas import (
 )
 from app.modules.org.deps import get_current_user, require_staff
 from app.modules.org.schemas import CurrentUser
+from app.modules.volunteers import service as volunteers_service
 
 router = APIRouter(tags=["knowledge"])
 
@@ -44,7 +45,7 @@ def submit_autopsy(
     db: DBSession = Depends(get_db),
 ) -> AutopsyOut:
     try:
-        autopsy, rated_volunteer_ids = service.submit_autopsy(
+        autopsy, rated_volunteer_ids, honored_volunteer_ids = service.submit_autopsy(
             db,
             user,
             event_id,
@@ -59,11 +60,13 @@ def submit_autopsy(
     except service.Forbidden:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot submit an autopsy for this event")
     except service.InvalidTransition:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Only completed events can have an autopsy")
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only events awaiting review can have an autopsy")
     except service.AlreadyExists:
         raise HTTPException(status.HTTP_409_CONFLICT, "This event already has an autopsy")
     job_tasks.cancel_autopsy_reminder(event_id)
-    for volunteer_id in set(rated_volunteer_ids):
+    if honored_volunteer_ids:
+        volunteers_service.mark_events_done(db, honored_volunteer_ids)
+    for volunteer_id in set(rated_volunteer_ids) | set(honored_volunteer_ids):
         job_tasks.schedule_score_recalc(volunteer_id)
     return autopsy
 

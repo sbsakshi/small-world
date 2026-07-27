@@ -93,8 +93,12 @@ export default function PersonProfilePage() {
   const withEvent = assignments
     .map((a) => ({ assignment: a, event: events.find((e) => e.id === a.event_id) }))
     .filter((x) => x.event) as { assignment: Assignment; event: Event }[];
-  const upcoming = withEvent.filter((x) => x.event.status === "published" || x.event.status === "draft");
-  const history = withEvent.filter((x) => x.event.status === "completed" || x.event.status === "cancelled");
+  const upcoming = withEvent.filter(
+    (x) => x.event.status === "published" || x.event.status === "draft" || x.event.status === "started"
+  );
+  const history = withEvent.filter(
+    (x) => x.event.status === "closed" || x.event.status === "awaiting_review" || x.event.status === "cancelled"
+  );
 
   function venueName(id: number): string {
     return venues.find((v) => v.id === id)?.name ?? "";

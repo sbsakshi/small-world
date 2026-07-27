@@ -6,15 +6,13 @@ from app.jobs import tasks as job_tasks
 from app.modules.events import service
 from app.modules.events.models import EventStatus
 from app.modules.events.schemas import EventCreate, EventDuplicate, EventOut, EventUpdate
-from app.modules.org.deps import require_staff
+from app.modules.org.deps import get_current_user, require_staff
 from app.modules.org.schemas import CurrentUser
-from app.modules.volunteers import service as volunteers_service
-from app.modules.volunteers.models import AssignmentStatus
 
-router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(require_staff)])
+router = APIRouter(prefix="/events", tags=["events"])
 
 
-@router.get("", response_model=list[EventOut])
+@router.get("", response_model=list[EventOut], dependencies=[Depends(require_staff)])
 def list_events(
     city_id: int | None = None,
     venue_id: int | None = None,
@@ -27,7 +25,7 @@ def list_events(
 
 @router.get("/{event_id}", response_model=EventOut)
 def get_event(
-    event_id: int, user: CurrentUser = Depends(require_staff), db: DBSession = Depends(get_db)
+    event_id: int, user: CurrentUser = Depends(get_current_user), db: DBSession = Depends(get_db)
 ) -> EventOut:
     try:
         return service.get_event(db, user, event_id)
@@ -37,7 +35,7 @@ def get_event(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot view this event")
 
 
-@router.post("", response_model=EventOut)
+@router.post("", response_model=EventOut, dependencies=[Depends(require_staff)])
 def create_event(
     payload: EventCreate, user: CurrentUser = Depends(require_staff), db: DBSession = Depends(get_db)
 ) -> EventOut:
@@ -47,7 +45,7 @@ def create_event(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot create an event in this city")
 
 
-@router.patch("/{event_id}", response_model=EventOut)
+@router.patch("/{event_id}", response_model=EventOut, dependencies=[Depends(require_staff)])
 def update_event(
     event_id: int,
     payload: EventUpdate,
@@ -64,7 +62,7 @@ def update_event(
         raise HTTPException(status.HTTP_409_CONFLICT, "Event is no longer editable")
 
 
-@router.post("/{event_id}/publish", response_model=EventOut)
+@router.post("/{event_id}/publish", response_model=EventOut, dependencies=[Depends(require_staff)])
 def publish_event(
     event_id: int, user: CurrentUser = Depends(require_staff), db: DBSession = Depends(get_db)
 ) -> EventOut:
@@ -80,7 +78,7 @@ def publish_event(
     return event
 
 
-@router.post("/{event_id}/cancel", response_model=EventOut)
+@router.post("/{event_id}/cancel", response_model=EventOut, dependencies=[Depends(require_staff)])
 def cancel_event(
     event_id: int, user: CurrentUser = Depends(require_staff), db: DBSession = Depends(get_db)
 ) -> EventOut:
@@ -96,31 +94,7 @@ def cancel_event(
     return event
 
 
-@router.post("/{event_id}/complete", response_model=EventOut)
-def complete_event(
-    event_id: int, user: CurrentUser = Depends(require_staff), db: DBSession = Depends(get_db)
-) -> EventOut:
-    try:
-        event = service.complete_event(db, user, event_id)
-    except service.NotFound:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
-    except service.Forbidden:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot close out this event")
-    except service.InvalidTransition:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Only published events can be completed")
-    job_tasks.cancel_no_show_sweep(event.id)
-    accepted = volunteers_service.list_assignments(db, event_id=event.id)
-    honored_ids = [a.volunteer_id for a in accepted if a.status == AssignmentStatus.accepted]
-    if honored_ids:
-        volunteers_service.mark_events_done(db, honored_ids)
-        for volunteer_id in honored_ids:
-            job_tasks.schedule_score_recalc(volunteer_id)
-    job_tasks.schedule_autopsy_prompt(event.id)
-    job_tasks.schedule_autopsy_reminder(event.id)
-    return event
-
-
-@router.post("/{event_id}/duplicate", response_model=EventOut)
+@router.post("/{event_id}/duplicate", response_model=EventOut, dependencies=[Depends(require_staff)])
 def duplicate_event(
     event_id: int,
     payload: EventDuplicate,

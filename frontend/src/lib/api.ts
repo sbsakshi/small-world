@@ -82,6 +82,7 @@ export const updateCity = (id: number, payload: Partial<Pick<City, "name" | "act
   request<City>(`/cities/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 
 export const listVenues = () => request<Venue[]>("/venues");
+export const getVenue = (id: number) => request<Venue>(`/venues/${id}`);
 export const createVenue = (payload: Omit<Venue, "id" | "active"> & { active?: boolean }) =>
   request<Venue>("/venues", { method: "POST", body: JSON.stringify(payload) });
 export const updateVenue = (id: number, payload: Partial<Omit<Venue, "id" | "city_id">>) =>
@@ -103,7 +104,7 @@ export const updateStaff = (id: number, payload: Partial<Omit<Staff, "id" | "log
 // --- Events ---
 
 export type EventCategory = "art" | "social" | "wellness" | "cooking";
-export type EventStatus = "draft" | "published" | "completed" | "cancelled";
+export type EventStatus = "draft" | "published" | "started" | "awaiting_review" | "closed" | "cancelled";
 
 export interface Event {
   id: number;
@@ -115,6 +116,7 @@ export interface Event {
   capacity: number;
   lead_id: number;
   status: EventStatus;
+  started_at: string | null;
 }
 
 export const listEvents = (filters?: { city_id?: number; venue_id?: number; status_?: EventStatus }) => {
@@ -126,13 +128,13 @@ export const listEvents = (filters?: { city_id?: number; venue_id?: number; stat
   return request<Event[]>(`/events${qs ? `?${qs}` : ""}`);
 };
 export const getEvent = (id: number) => request<Event>(`/events/${id}`);
-export const createEvent = (payload: Omit<Event, "id" | "status">) =>
+export const createEvent = (payload: Omit<Event, "id" | "status" | "started_at">) =>
   request<Event>("/events", { method: "POST", body: JSON.stringify(payload) });
-export const updateEvent = (id: number, payload: Partial<Omit<Event, "id" | "status" | "city_id">>) =>
+export const updateEvent = (id: number, payload: Partial<Omit<Event, "id" | "status" | "city_id" | "started_at">>) =>
   request<Event>(`/events/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const publishEvent = (id: number) => request<Event>(`/events/${id}/publish`, { method: "POST" });
 export const cancelEvent = (id: number) => request<Event>(`/events/${id}/cancel`, { method: "POST" });
-export const completeEvent = (id: number) => request<Event>(`/events/${id}/complete`, { method: "POST" });
+export const closeDoor = (id: number) => request<Event>(`/events/${id}/close-door`, { method: "POST" });
 export const duplicateEvent = (id: number, startsAt: string) =>
   request<Event>(`/events/${id}/duplicate`, { method: "POST", body: JSON.stringify({ starts_at: startsAt }) });
 
@@ -183,6 +185,15 @@ export const createManualBooking = (payload: {
 }) => request<Booking>("/bookings/manual", { method: "POST", body: JSON.stringify(payload) });
 export const checkInBooking = (eventId: number, bookingId: number) =>
   request<Booking>(`/events/${eventId}/checkin/${bookingId}`, { method: "POST" });
+
+export interface DoorRosterEntry {
+  booking_id: number;
+  name: string;
+  phone: string;
+  status: BookingStatus;
+}
+
+export const listDoorRoster = (eventId: number) => request<DoorRosterEntry[]>(`/events/${eventId}/door-roster`);
 
 export async function importBookingsCsv(eventId: number, file: File) {
   const form = new FormData();
